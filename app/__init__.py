@@ -1,0 +1,1 @@
+"""SEO linked application package."""
