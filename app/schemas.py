@@ -28,33 +28,33 @@ class OptimizationStatus(str, Enum):
 class LinkingAnalyzeRequest(BaseModel):
     start_url: AnyHttpUrl = Field(
         ...,
-        description="Site page where the crawl starts.",
+        description="Страница сайта, с которой начинается обход.",
     )
     target_url: AnyHttpUrl | None = Field(
         default=None,
-        description="Target page URL. Best option when you want exact depth to a known page.",
+        description="URL целевой страницы. Лучший вариант, если нужно точно измерить глубину до известной страницы.",
     )
     target_title: str | None = Field(
         default=None,
         min_length=1,
-        description="Optional page lookup by title.",
+        description="Необязательный поиск страницы по заголовку.",
     )
     target_text: str | None = Field(
         default=None,
         min_length=1,
-        description="Optional page lookup by body text.",
+        description="Необязательный поиск страницы по тексту.",
     )
     timeout_seconds: float = Field(
         default=settings.request_timeout_seconds,
         gt=0,
         le=60,
-        description="Timeout for a single HTTP request.",
+        description="Таймаут одного HTTP-запроса.",
     )
     retry_count: int = Field(
         default=settings.request_retry_count,
         ge=0,
         le=5,
-        description="Retry count for transient network failures.",
+        description="Количество повторов при временных сетевых ошибках.",
     )
 
     if PYDANTIC_V2:
@@ -70,7 +70,6 @@ class LinkingAnalyzeRequest(BaseModel):
                 }
             }
         }
-
     else:  # pragma: no cover
 
         class Config:
@@ -90,9 +89,7 @@ class LinkingAnalyzeRequest(BaseModel):
         @model_validator(mode="after")
         def validate_target(self) -> "LinkingAnalyzeRequest":
             if not any((self.target_url, self.target_title, self.target_text)):
-                raise ValueError(
-                    "At least one search criterion is required: target_url, target_title, or target_text."
-                )
+                raise ValueError("Нужно указать хотя бы один критерий поиска: target_url, target_title или target_text.")
             return self
 
     else:  # pragma: no cover
@@ -100,9 +97,7 @@ class LinkingAnalyzeRequest(BaseModel):
         @root_validator
         def validate_target(cls, values: dict) -> dict:
             if not any((values.get("target_url"), values.get("target_title"), values.get("target_text"))):
-                raise ValueError(
-                    "At least one search criterion is required: target_url, target_title, or target_text."
-                )
+                raise ValueError("Нужно указать хотя бы один критерий поиска: target_url, target_title или target_text.")
             return values
 
 
@@ -122,6 +117,8 @@ class LinkingAnalyzeResponse(BaseModel):
     path: list[str]
     optimization_status: OptimizationStatus
     message: str
+    message_source: str | None = None
+    message_error: str | None = None
     pages_fetched: int
     pages_discovered: int
     sitemap_checked: bool
@@ -145,7 +142,12 @@ class LinkingAnalyzeResponse(BaseModel):
                         "https://example.com/catalog/target-page",
                     ],
                     "optimization_status": "good",
-                    "message": "Хорошая перелинковка: целевая страница найдена за 3 шаг(а/ов), порог 4.",
+                    "message": (
+                        "Целевая страница находится в 3 шагах от стартовой при пороге 4, "
+                        "поэтому перелинковка выглядит хорошей."
+                    ),
+                    "message_source": "llm",
+                    "message_error": None,
                     "pages_fetched": 7,
                     "pages_discovered": 12,
                     "sitemap_checked": True,
@@ -160,7 +162,6 @@ class LinkingAnalyzeResponse(BaseModel):
                 }
             }
         }
-
     else:  # pragma: no cover
 
         class Config:
@@ -178,7 +179,12 @@ class LinkingAnalyzeResponse(BaseModel):
                         "https://example.com/catalog/target-page",
                     ],
                     "optimization_status": "good",
-                    "message": "Хорошая перелинковка: целевая страница найдена за 3 шаг(а/ов), порог 4.",
+                    "message": (
+                        "Целевая страница находится в 3 шагах от стартовой при пороге 4, "
+                        "поэтому перелинковка выглядит хорошей."
+                    ),
+                    "message_source": "llm",
+                    "message_error": None,
                     "pages_fetched": 7,
                     "pages_discovered": 12,
                     "sitemap_checked": True,

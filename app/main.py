@@ -17,7 +17,7 @@ app = FastAPI(
 )
 
 
-@app.get("/health", tags=["system"])
+@app.get("/health", tags=["система"])
 async def healthcheck() -> dict[str, str]:
     return {"status": "ok"}
 
@@ -25,7 +25,7 @@ async def healthcheck() -> dict[str, str]:
 @app.post(
     "/api/v1/internal-linking/analyze",
     response_model=LinkingAnalyzeResponse,
-    tags=["internal-linking"],
+    tags=["перелинковка"],
     summary=settings.analyze_summary,
 )
 async def analyze_internal_linking(payload: LinkingAnalyzeRequest) -> LinkingAnalyzeResponse:
