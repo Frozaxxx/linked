@@ -123,6 +123,8 @@ class LinkingAnalyzeResponse(BaseModel):
     pages_discovered: int
     sitemap_checked: bool
     found_in_sitemap: bool
+    html_fetch_mode: str
+    sitemap_fetch_mode: str
     strategy: str
     timings: AnalyzeTimings
 
@@ -152,6 +154,8 @@ class LinkingAnalyzeResponse(BaseModel):
                     "pages_discovered": 12,
                     "sitemap_checked": True,
                     "found_in_sitemap": True,
+                    "html_fetch_mode": "playwright",
+                    "sitemap_fetch_mode": "http-only",
                     "strategy": "bfs + live sitemap",
                     "timings": {
                         "total_ms": 184.231,
@@ -189,6 +193,8 @@ class LinkingAnalyzeResponse(BaseModel):
                     "pages_discovered": 12,
                     "sitemap_checked": True,
                     "found_in_sitemap": True,
+                    "html_fetch_mode": "playwright",
+                    "sitemap_fetch_mode": "http-only",
                     "strategy": "bfs + live sitemap",
                     "timings": {
                         "total_ms": 184.231,

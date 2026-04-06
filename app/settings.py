@@ -70,6 +70,10 @@ class Settings(BaseSettings):
         "Chrome/133.0.0.0 Safari/537.36"
     )
     fetch_accept_header: str = "text/html,application/xhtml+xml,application/xml,text/xml;q=0.9,*/*;q=0.8"
+    fetch_browser_name: str = "chromium"
+    fetch_browser_headless: bool = True
+    fetch_browser_network_idle_timeout_ms: int = 1500
+    fetch_browser_post_load_wait_ms: int = 250
 
 
 @lru_cache(maxsize=1)

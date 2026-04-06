@@ -85,15 +85,21 @@ def normalize_url(
 
     resolved = urljoin(base_url, raw_url) if base_url else raw_url
     parsed = urlsplit(resolved)
-    if parsed.scheme.casefold() not in {"http", "https"} or not parsed.hostname:
+    try:
+        hostname = parsed.hostname
+        port = parsed.port
+    except ValueError:
         return None
 
-    host = parsed.hostname.casefold()
-    if parsed.port and not (
-        (parsed.scheme.casefold() == "http" and parsed.port == 80)
-        or (parsed.scheme.casefold() == "https" and parsed.port == 443)
+    if parsed.scheme.casefold() not in {"http", "https"} or not hostname:
+        return None
+
+    host = hostname.casefold()
+    if port and not (
+        (parsed.scheme.casefold() == "http" and port == 80)
+        or (parsed.scheme.casefold() == "https" and port == 443)
     ):
-        netloc = f"{host}:{parsed.port}"
+        netloc = f"{host}:{port}"
     else:
         netloc = host
 

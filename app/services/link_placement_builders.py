@@ -192,10 +192,14 @@ class LinkPlacementBuilderMixin:
             source_depth = verified_depths.get(url)
             if source_depth is None or not self._is_allowed_source_depth(source_depth):
                 continue
+            shared_path_bonus = self._shared_path_bonus(url)
+            legacy_score = score_link(url, "", self._target.priority_terms)
+            if shared_path_bonus <= 0 and legacy_score <= 0:
+                continue
             backup_score = (
-                self._shared_path_bonus(url) * 4
+                shared_path_bonus * 4
                 + max(self._good_depth_threshold - source_depth, 0) * 5
-                + score_link(url, "", self._target.priority_terms)
+                + legacy_score
             )
             if backup_score <= 0:
                 backup_score = max(self._good_depth_threshold - source_depth, 1)
@@ -247,7 +251,13 @@ class LinkPlacementBuilderMixin:
             projected_steps = self._projected_steps(source_depth)
             if projected_steps is not None and projected_steps > self._good_depth_threshold:
                 continue
-            score = self.score_source_url(url) + max(max_source_depth - source_depth, 0) * 2
+            structural_bonus = max(max_source_depth - source_depth, 0) * 2
+            shared_path_bonus = self._shared_path_bonus(url)
+            strong_score = self.score_source_url(url)
+            soft_score = self.score_source_url_soft(url)
+            if strong_score <= 0 and soft_score <= 0 and shared_path_bonus <= 0:
+                continue
+            score = max(strong_score, soft_score) + structural_bonus
             if score <= 0:
                 continue
             ranked.append(
@@ -261,7 +271,7 @@ class LinkPlacementBuilderMixin:
                         reason=self._build_url_only_reason(url),
                         placement_hint=self._placement_hint(source_depth),
                         anchor_hint=self._anchor_hint(),
-                        confidence="medium",
+                        confidence="fallback",
                     ),
                 )
             )

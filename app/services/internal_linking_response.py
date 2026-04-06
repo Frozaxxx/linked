@@ -4,9 +4,8 @@ import asyncio
 
 from urllib.parse import urlsplit, urlunsplit
 
-import httpx
-
 from app.schemas import LinkingAnalyzeResponse
+from app.services.fetcher import FetchSession
 from app.services.internal_linking_models import SITEMAP_RECOMMENDATION_RANK_LIMIT
 from app.services.link_placement import CrawledPageSnapshot
 from app.services.llm_summary import AnalysisMessageContext
@@ -31,8 +30,9 @@ class InternalLinkingResponseMixin:
         found_in_sitemap: bool,
         strategy: str,
         timings,
-        client: httpx.AsyncClient,
+        client: FetchSession,
         crawled_pages: dict[str, CrawledPageSnapshot],
+        discovered_depths: dict[str, int],
         sitemap_page_urls: set[str],
         search_depth_limit: int,
     ) -> LinkingAnalyzeResponse:
@@ -44,8 +44,31 @@ class InternalLinkingResponseMixin:
                 steps_to_target=steps_to_target,
                 path=path,
                 crawled_pages=crawled_pages,
+                )
             )
-        )
+
+        if not placement_recommendations and discovered_depths:
+            placement_recommendations = self._build_depth_based_recommendations(
+                candidate_depths=discovered_depths,
+                path=path,
+                soft=False,
+            )
+
+        if not placement_recommendations and sitemap_page_urls:
+            placement_recommendations = self._sanitize_placement_recommendations(
+                self._placement_recommender.build_structural_recommendations(
+                    sitemap_page_urls=sitemap_page_urls,
+                    excluded_urls=set(path),
+                )
+            )
+
+        if not placement_recommendations and self._target.url:
+            placement_recommendations = self._sanitize_placement_recommendations(
+                self._placement_recommender.build_structural_recommendations(
+                    sitemap_page_urls=set(self._candidate_parent_urls()),
+                    excluded_urls=set(path),
+                )
+            )
 
         if not placement_recommendations and sitemap_page_urls:
             sitemap_candidate_urls = self._rank_sitemap_candidate_urls(
@@ -111,6 +134,13 @@ class InternalLinkingResponseMixin:
                 )
             )
 
+        if not placement_recommendations and discovered_depths:
+            placement_recommendations = self._build_depth_based_recommendations(
+                candidate_depths=discovered_depths,
+                path=path,
+                soft=True,
+            )
+
         if not placement_recommendations and sitemap_page_urls:
             relaxed_sitemap_candidate_urls = self._rank_sitemap_candidate_urls(
                 sitemap_page_urls=sitemap_page_urls,
@@ -164,6 +194,8 @@ class InternalLinkingResponseMixin:
                 pages_discovered=pages_discovered,
                 sitemap_checked=sitemap_checked,
                 found_in_sitemap=found_in_sitemap,
+                html_fetch_mode=client.html_fetch_mode,
+                sitemap_fetch_mode=client.sitemap_fetch_mode,
                 path=path,
                 placement_recommendations=placement_recommendations,
             )
@@ -184,6 +216,8 @@ class InternalLinkingResponseMixin:
             pages_discovered=pages_discovered,
             sitemap_checked=sitemap_checked,
             found_in_sitemap=found_in_sitemap,
+            html_fetch_mode=client.html_fetch_mode,
+            sitemap_fetch_mode=client.sitemap_fetch_mode,
             strategy=strategy,
             timings=timings,
         )
@@ -191,7 +225,7 @@ class InternalLinkingResponseMixin:
     async def _populate_verified_candidate_snapshots(
         self,
         *,
-        client: httpx.AsyncClient,
+        client: FetchSession,
         candidate_depths: dict[str, int],
         crawled_pages: dict[str, CrawledPageSnapshot],
     ) -> int:
@@ -237,6 +271,30 @@ class InternalLinkingResponseMixin:
             sanitized.append(recommendation)
         return sanitized
 
+    def _build_depth_based_recommendations(
+        self,
+        *,
+        candidate_depths: dict[str, int],
+        path: list[str],
+        soft: bool,
+    ) -> list:
+        if not candidate_depths:
+            return []
+        excluded_urls = set(path)
+        if soft:
+            recommendations = self._placement_recommender.build_soft_url_only_recommendations(
+                sitemap_page_urls=set(candidate_depths),
+                excluded_urls=excluded_urls,
+                verified_depths=candidate_depths,
+            )
+        else:
+            recommendations = self._placement_recommender.build_url_only_recommendations(
+                sitemap_page_urls=set(candidate_depths),
+                excluded_urls=excluded_urls,
+                verified_depths=candidate_depths,
+            )
+        return self._sanitize_placement_recommendations(recommendations)
+
     def _candidate_parent_urls(self) -> list[str]:
         if not self._target.url:
             return []
@@ -271,13 +329,17 @@ class InternalLinkingResponseMixin:
 
     async def _fetch_recommendation_snapshot(
         self,
-        client: httpx.AsyncClient,
+        client: FetchSession,
         url: str,
         *,
         depth: int | None = None,
     ) -> CrawledPageSnapshot | None:
         async with self._semaphore:
-            document = await self._fetcher.fetch(client, url)
+            document = await self._fetcher.fetch(
+                client,
+                url,
+                total_timeout_seconds=self._remaining_fetch_budget_seconds(),
+            )
         if document is None:
             return None
         normalized_final_url = normalize_url(document.final_url)

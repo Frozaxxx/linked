@@ -3,9 +3,8 @@ from __future__ import annotations
 import asyncio
 from urllib.parse import urlsplit
 
-import httpx
-
 from app.services.frontier import CrawlNode, prioritize, score_link
+from app.services.fetcher import FetchSession
 from app.services.internal_linking_models import MAX_RECOMMENDATION_SOURCE_DEPTH, TargetVerificationResult
 from app.services.link_placement import CrawledPageSnapshot
 from app.services.parser import is_internal_url, normalize_url
@@ -40,7 +39,7 @@ class InternalLinkingVerificationMixin:
     async def _verify_candidate_depths(
         self,
         *,
-        client: httpx.AsyncClient,
+        client: FetchSession,
         candidate_urls: list[str],
         crawled_pages: dict[str, CrawledPageSnapshot],
     ) -> dict[str, int]:
@@ -137,7 +136,7 @@ class InternalLinkingVerificationMixin:
     async def _verify_target_path(
         self,
         *,
-        client: httpx.AsyncClient,
+        client: FetchSession,
         crawled_pages: dict[str, CrawledPageSnapshot],
         discovered_urls: set[str],
         max_depth: int,

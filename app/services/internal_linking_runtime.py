@@ -13,6 +13,7 @@ from app.settings import get_settings
 
 
 settings = get_settings()
+FETCH_BUDGET_SAFETY_MARGIN_SECONDS = 0.5
 
 
 class InternalLinkingRuntimeMixin:
@@ -33,6 +34,12 @@ class InternalLinkingRuntimeMixin:
         if self._deadline_started_at is None:
             return None
         return settings.analyze_time_budget_seconds - (perf_counter() - self._deadline_started_at)
+
+    def _remaining_fetch_budget_seconds(self) -> float | None:
+        remaining = self._remaining_budget_seconds()
+        if remaining is None:
+            return None
+        return max(remaining - FETCH_BUDGET_SAFETY_MARGIN_SECONDS, 0.0)
 
     @staticmethod
     def _limit_nodes(nodes: list) -> list:
@@ -58,6 +65,12 @@ class InternalLinkingRuntimeMixin:
             existing = target_depths.get(url)
             if existing is None or depth < existing:
                 target_depths[url] = depth
+
+    @staticmethod
+    def _remember_depth(target_depths: dict[str, int], url: str, depth: int) -> None:
+        existing = target_depths.get(url)
+        if existing is None or depth < existing:
+            target_depths[url] = depth
 
     @staticmethod
     def _resolve_optimization_status(*, found: bool, steps_to_target: int | None) -> OptimizationStatus:

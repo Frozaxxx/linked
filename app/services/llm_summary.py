@@ -47,6 +47,8 @@ class AnalysisMessageContext:
     pages_discovered: int
     sitemap_checked: bool
     found_in_sitemap: bool
+    html_fetch_mode: str
+    sitemap_fetch_mode: str
     path: list[str]
     placement_recommendations: list[PlacementRecommendation]
 

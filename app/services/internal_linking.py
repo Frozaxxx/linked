@@ -6,7 +6,7 @@ from time import perf_counter
 import httpx
 
 from app.schemas import LinkingAnalyzeRequest, LinkingAnalyzeResponse
-from app.services.fetcher import AsyncFetcher
+from app.services.fetcher import AsyncFetcher, FetchSession
 from app.services.frontier import CrawlNode, apply_sitemap_bonus, prioritize, score_link
 from app.services.internal_linking_models import (
     LIVE_SITEMAP_STRATEGY,
@@ -93,10 +93,14 @@ class InternalLinkingAnalyzer(
         )
         self._placement_recommender = self._build_placement_recommender()
 
-    async def _resolve_target_metadata(self, client: httpx.AsyncClient) -> int:
+    async def _resolve_target_metadata(self, client: FetchSession) -> int:
         if not self._requested_target_url or not is_internal_url(self._requested_target_url, self._allowed_host):
             return 0
-        document = await self._fetcher.fetch(client, self._requested_target_url)
+        document = await self._fetcher.fetch(
+            client,
+            self._requested_target_url,
+            total_timeout_seconds=self._remaining_fetch_budget_seconds(),
+        )
         if document is None:
             return 0
         normalized_final_url = normalize_url(document.final_url)
@@ -124,6 +128,7 @@ class InternalLinkingAnalyzer(
         self._deadline_started_at = started_at
         pages_fetched = 0
         discovered_urls: set[str] = {self._start_url}
+        discovered_depths: dict[str, int] = {self._start_url: 0}
         crawled_pages: dict[str, CrawledPageSnapshot] = {}
         search_depth_limit = settings.good_depth_threshold
 
@@ -173,6 +178,7 @@ class InternalLinkingAnalyzer(
                                     timings=self._build_timings(started_at=started_at, finished_at=perf_counter(), found=True, sitemap=sitemap),
                                     client=client,
                                     crawled_pages=crawled_pages,
+                                    discovered_depths=discovered_depths,
                                     sitemap_page_urls=sitemap.page_urls,
                                     search_depth_limit=search_depth_limit,
                                 )
@@ -196,10 +202,12 @@ class InternalLinkingAnalyzer(
                                         timings=self._build_timings(started_at=started_at, finished_at=perf_counter(), found=True, sitemap=sitemap),
                                         client=client,
                                         crawled_pages=crawled_pages,
+                                        discovered_depths=discovered_depths,
                                         sitemap_page_urls=sitemap.page_urls,
                                         search_depth_limit=search_depth_limit,
                                     )
                                 if link.url in discovered_urls:
+                                    self._remember_depth(discovered_depths, link.url, node.depth + 1)
                                     continue
                                 candidate = CrawlNode(
                                     url=link.url,
@@ -207,6 +215,7 @@ class InternalLinkingAnalyzer(
                                     path=node.path + [link.url],
                                     score=score_link(link.url, link.anchor_text, self._target.priority_terms),
                                 )
+                                self._remember_depth(discovered_depths, link.url, candidate.depth)
                                 existing = level_candidates.get(link.url)
                                 if existing is None or candidate.score > existing.score:
                                     level_candidates[link.url] = candidate
@@ -239,6 +248,7 @@ class InternalLinkingAnalyzer(
                         timings=self._build_timings(started_at=started_at, finished_at=perf_counter(), found=True, sitemap=sitemap),
                         client=client,
                         crawled_pages=crawled_pages,
+                        discovered_depths=discovered_depths,
                         sitemap_page_urls=sitemap.page_urls,
                         search_depth_limit=search_depth_limit,
                     )
@@ -262,6 +272,7 @@ class InternalLinkingAnalyzer(
                     timings=self._build_timings(started_at=started_at, finished_at=perf_counter(), found=False, sitemap=sitemap),
                     client=client,
                     crawled_pages=crawled_pages,
+                    discovered_depths=discovered_depths,
                     sitemap_page_urls=sitemap.page_urls,
                     search_depth_limit=search_depth_limit,
                 )
@@ -294,7 +305,7 @@ class InternalLinkingAnalyzer(
         except asyncio.TimeoutError:
             return
 
-    async def _collect_sitemap_snapshot(self, client: httpx.AsyncClient, sitemap: SitemapSnapshot) -> None:
+    async def _collect_sitemap_snapshot(self, client: FetchSession, sitemap: SitemapSnapshot) -> None:
         sitemap_queue = [normalize_url("sitemap.xml", get_site_root(self._start_url), allow_ignored_extensions=True)]
         checked: set[str] = set()
         try:
@@ -307,7 +318,12 @@ class InternalLinkingAnalyzer(
                 checked.add(sitemap_url)
                 sitemap.checked = True
                 async with self._semaphore:
-                    document = await self._fetcher.fetch(client, sitemap_url)
+                    document = await self._fetcher.fetch(
+                        client,
+                        sitemap_url,
+                        render_html=False,
+                        total_timeout_seconds=self._remaining_fetch_budget_seconds(),
+                    )
                 if document is None:
                     continue
                 parsed = parse_sitemap(document.body, self._allowed_host)
@@ -321,9 +337,13 @@ class InternalLinkingAnalyzer(
         finally:
             sitemap.finished_at = perf_counter()
 
-    async def _fetch_node(self, client: httpx.AsyncClient, node: CrawlNode) -> tuple[CrawlNode, ParsedPage | None]:
+    async def _fetch_node(self, client: FetchSession, node: CrawlNode) -> tuple[CrawlNode, ParsedPage | None]:
         async with self._semaphore:
-            document = await self._fetcher.fetch(client, node.url)
+            document = await self._fetcher.fetch(
+                client,
+                node.url,
+                total_timeout_seconds=self._remaining_fetch_budget_seconds(),
+            )
         if document is None:
             return node, None
         normalized_final_url = normalize_url(document.final_url)
