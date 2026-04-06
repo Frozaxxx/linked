@@ -111,6 +111,7 @@ class AnalyzeTimings(BaseModel):
 class LinkingAnalyzeResponse(BaseModel):
     start_url: str
     target_url: str | None
+    fetch_summary: str
     found: bool
     matched_by: list[str]
     steps_to_target: int | None
@@ -134,6 +135,7 @@ class LinkingAnalyzeResponse(BaseModel):
                 "example": {
                     "start_url": "https://example.com/",
                     "target_url": "https://example.com/catalog/target-page",
+                    "fetch_summary": "HTML: Playwright; sitemap: HTTP-only.",
                     "found": True,
                     "matched_by": ["url"],
                     "steps_to_target": 3,
@@ -173,6 +175,7 @@ class LinkingAnalyzeResponse(BaseModel):
                 "example": {
                     "start_url": "https://example.com/",
                     "target_url": "https://example.com/catalog/target-page",
+                    "fetch_summary": "HTML: Playwright; sitemap: HTTP-only.",
                     "found": True,
                     "matched_by": ["url"],
                     "steps_to_target": 3,

@@ -204,6 +204,10 @@ class InternalLinkingResponseMixin:
         return LinkingAnalyzeResponse(
             start_url=self._start_url,
             target_url=self._requested_target_url or self._target.url,
+            fetch_summary=self._build_fetch_summary(
+                html_fetch_mode=client.html_fetch_mode,
+                sitemap_fetch_mode=client.sitemap_fetch_mode,
+            ),
             found=found,
             matched_by=matched_by,
             steps_to_target=steps_to_target,
@@ -221,6 +225,30 @@ class InternalLinkingResponseMixin:
             strategy=strategy,
             timings=timings,
         )
+
+    @staticmethod
+    def _build_fetch_summary(*, html_fetch_mode: str, sitemap_fetch_mode: str) -> str:
+        return f"{InternalLinkingResponseMixin._html_fetch_summary(html_fetch_mode)}; {InternalLinkingResponseMixin._sitemap_fetch_summary(sitemap_fetch_mode)}."
+
+    @staticmethod
+    def _html_fetch_summary(mode: str) -> str:
+        if mode == "playwright":
+            return "HTML: Playwright"
+        if mode == "http-only":
+            return "HTML: HTTP-only"
+        if mode == "mixed":
+            return "HTML: Playwright -> HTTP fallback"
+        return "HTML: not requested"
+
+    @staticmethod
+    def _sitemap_fetch_summary(mode: str) -> str:
+        if mode == "playwright":
+            return "sitemap: Playwright"
+        if mode == "http-only":
+            return "sitemap: HTTP-only"
+        if mode == "mixed":
+            return "sitemap: Playwright -> HTTP fallback"
+        return "sitemap: not requested"
 
     async def _populate_verified_candidate_snapshots(
         self,

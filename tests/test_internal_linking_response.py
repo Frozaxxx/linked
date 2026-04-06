@@ -18,6 +18,14 @@ class ResponseFallbackHarness(InternalLinkingResponseMixin):
 
 
 class InternalLinkingResponseFallbackTests(unittest.TestCase):
+    def test_fetch_summary_reports_transport_at_top_level(self) -> None:
+        summary = ResponseFallbackHarness._build_fetch_summary(
+            html_fetch_mode="mixed",
+            sitemap_fetch_mode="http-only",
+        )
+
+        self.assertEqual(summary, "HTML: Playwright -> HTTP fallback; sitemap: HTTP-only.")
+
     def test_structural_recommendations_from_parent_branch_are_available_without_crawl(self) -> None:
         harness = ResponseFallbackHarness(
             "https://www.noaa.gov/regional-collaboration-network/regions-great-lakes/glri/about-glri/glri-focus-area-5-foundations/winter-observations-using-autonomous-mobile-platforms",

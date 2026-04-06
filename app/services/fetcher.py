@@ -126,7 +126,10 @@ class AsyncFetcher:
         )
         session = FetchSession(http_client=http_client)
         try:
-            session = await self._create_browser_session(http_client)
+            try:
+                session = await self._create_browser_session(http_client)
+            except RuntimeError as exc:
+                logger.warning("Playwright browser session is unavailable, falling back to HTTP-only fetching: %s", exc)
             yield session
         finally:
             await session.close()
@@ -143,6 +146,40 @@ class AsyncFetcher:
             return None
 
         deadline = perf_counter() + total_timeout_seconds if total_timeout_seconds is not None else None
+        if render_html and session.browser_context is not None:
+            session.record_fetch_mode(render_html=True, mode="playwright")
+            try:
+                return await self._retry_fetch(
+                    lambda timeout_seconds: self._fetch_with_browser(
+                        session.browser_context,
+                        url,
+                        timeout_seconds=timeout_seconds,
+                    ),
+                    deadline=deadline,
+                )
+            except (BrowserHTTPStatusError, PlaywrightError, PlaywrightTimeoutError) as exc:
+                logger.debug("Browser fetch failed for %s after retries, falling back to HTTP: %s", url, exc)
+
+        session.record_fetch_mode(render_html=render_html, mode="http-only")
+        try:
+            return await self._retry_fetch(
+                lambda timeout_seconds: self._fetch_with_http(
+                    session.http_client,
+                    url,
+                    timeout_seconds=timeout_seconds,
+                ),
+                deadline=deadline,
+            )
+        except (httpx.TimeoutException, httpx.RequestError, httpx.HTTPStatusError) as exc:
+            logger.debug("HTTP fetch failed for %s after retries: %s", url, exc)
+            return None
+
+    async def _retry_fetch(
+        self,
+        fetch_operation,
+        *,
+        deadline: float | None,
+    ) -> FetchedDocument | None:
         retryer = AsyncRetrying(
             stop=stop_after_attempt(self._retry_count + 1),
             wait=wait_exponential(multiplier=0.3, min=0.3, max=2),
@@ -150,35 +187,12 @@ class AsyncFetcher:
             reraise=True,
         )
 
-        try:
-            async for attempt in retryer:
-                attempt_timeout_seconds = self._resolve_attempt_timeout_seconds(deadline)
-                if attempt_timeout_seconds is None:
-                    return None
-                with attempt:
-                    if render_html and session.browser_context is not None:
-                        session.record_fetch_mode(render_html=True, mode="playwright")
-                        return await self._fetch_with_browser(
-                            session.browser_context,
-                            url,
-                            timeout_seconds=attempt_timeout_seconds,
-                        )
-                    session.record_fetch_mode(render_html=render_html, mode="http-only")
-                    return await self._fetch_with_http(
-                        session.http_client,
-                        url,
-                        timeout_seconds=attempt_timeout_seconds,
-                    )
-        except (
-            BrowserHTTPStatusError,
-            PlaywrightError,
-            PlaywrightTimeoutError,
-            httpx.TimeoutException,
-            httpx.RequestError,
-            httpx.HTTPStatusError,
-        ) as exc:
-            logger.debug("Failed to fetch %s after retries: %s", url, exc)
-            return None
+        async for attempt in retryer:
+            attempt_timeout_seconds = self._resolve_attempt_timeout_seconds(deadline)
+            if attempt_timeout_seconds is None:
+                return None
+            with attempt:
+                return await fetch_operation(attempt_timeout_seconds)
 
         return None
 

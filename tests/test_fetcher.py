@@ -4,7 +4,7 @@ import httpx
 import unittest
 from unittest.mock import AsyncMock
 
-from app.services.fetcher import AsyncFetcher, FetchSession, FetchedDocument
+from app.services.fetcher import AsyncFetcher, FetchSession, FetchedDocument, PlaywrightError
 
 
 class AsyncFetcherTests(unittest.IsolatedAsyncioTestCase):
@@ -111,6 +111,40 @@ class AsyncFetcherTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNotNone(document)
         self.assertEqual(session.sitemap_fetch_mode, "http-only")
+
+    async def test_fetch_falls_back_to_http_when_playwright_request_fails(self) -> None:
+        fetcher = AsyncFetcher(timeout_seconds=1, retry_count=0)
+        session = FetchSession(http_client=httpx.AsyncClient(), browser_context=object())
+        self.addAsyncCleanup(session.http_client.aclose)
+        fetcher._fetch_with_browser = AsyncMock(side_effect=PlaywrightError("browser failed"))
+        fetcher._fetch_with_http = AsyncMock(
+            return_value=FetchedDocument(
+                requested_url="https://example.com/",
+                final_url="https://example.com/",
+                body="<html>fallback</html>",
+                content_type="text/html",
+            )
+        )
+
+        document = await fetcher.fetch(
+            session,
+            "https://example.com/",
+            total_timeout_seconds=0.5,
+        )
+
+        self.assertIsNotNone(document)
+        self.assertEqual(document.body, "<html>fallback</html>")
+        self.assertEqual(session.html_fetch_mode, "mixed")
+        self.assertEqual(fetcher._fetch_with_browser.await_count, 1)
+        self.assertEqual(fetcher._fetch_with_http.await_count, 1)
+
+    async def test_create_client_falls_back_to_http_when_browser_session_does_not_start(self) -> None:
+        fetcher = AsyncFetcher(timeout_seconds=1, retry_count=0)
+        fetcher._create_browser_session = AsyncMock(side_effect=RuntimeError("playwright unavailable"))
+
+        async with fetcher.create_client() as session:
+            self.assertIsNone(session.browser_context)
+            self.assertEqual(session.html_fetch_mode, "not-requested")
 
 
 if __name__ == "__main__":
