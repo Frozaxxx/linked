@@ -24,6 +24,25 @@ class SitemapSnapshot:
 
 
 @dataclass(slots=True)
+class RobotsSnapshot:
+    checked: bool = False
+    available: bool = False
+    obeyed: bool = False
+    sitemap_urls: set[str] = field(default_factory=set)
+    blocked_urls: set[str] = field(default_factory=set)
+
+
+@dataclass(slots=True)
+class CrawlDiagnosticsSnapshot:
+    crawl_max_depth: int
+    budget_exhausted: bool = False
+    depth_cutoff: bool = False
+    level_truncated: bool = False
+    truncated_levels: int = 0
+    truncated_nodes: int = 0
+
+
+@dataclass(slots=True)
 class TargetVerificationResult:
     steps_to_target: int | None = None
     path: list[str] = field(default_factory=list)

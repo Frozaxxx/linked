@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
 
 RECOMMENDATION_MARKERS = (
-    "Рекоменд",
+    "Рекоменду",
     "Добавьте прямую ссылку",
     "Добавьте ссылку",
     "Лучше всего поставить",
@@ -100,6 +100,10 @@ def append_recommendation_sentence(message: str, recommendation: PlacementRecomm
     return f"{base} {sentence}"
 
 
+def crawl_is_inconclusive(context: AnalysisMessageContext) -> bool:
+    return getattr(context, "budget_exhausted", False) or getattr(context, "level_truncated", False)
+
+
 def problem_intro(context: AnalysisMessageContext) -> str:
     if context.found and context.steps_to_target is not None:
         return (
@@ -110,9 +114,19 @@ def problem_intro(context: AnalysisMessageContext) -> str:
             "а поисковому роботу сложнее понять, что страница важна внутри сайта."
         )
 
+    if crawl_is_inconclusive(context):
+        parts: list[str] = []
+        if context.found_in_sitemap:
+            parts.append("Целевая страница есть в sitemap.")
+        parts.append(
+            f"Короткий путь до целевой страницы в пределах {context.search_depth_limit} {step_word_after_preposition(context.search_depth_limit)} в этом запуске не подтвержден."
+        )
+        parts.append("Обход был неполным, поэтому это еще не доказывает слабую перелинковку.")
+        return " ".join(parts)
+
     return (
         "Перелинковка слабая: "
-        f"короткий путь до целевой страницы в пределах {context.good_depth_threshold} {step_word_after_preposition(context.good_depth_threshold)} не подтвержден. "
+        f"короткий путь до целевой страницы в пределах {context.search_depth_limit} {step_word_after_preposition(context.search_depth_limit)} не подтвержден. "
         "Из-за этого страница получает меньше внутреннего веса, пользователю сложнее быстро найти ее из навигации и связанных материалов, "
         "а поисковым системам сложнее считать ее приоритетной."
     )
@@ -125,13 +139,16 @@ def build_single_candidate_message(context: AnalysisMessageContext) -> str:
         f"Лучший семантически близкий URL для ссылки: {recommendation.source_url}.",
         recommendation.placement_hint.rstrip(".") + ".",
     ]
+    reason = candidate_reason_label(recommendation)
+    if reason:
+        parts.append(f"Почему выбран именно он: {reason}.")
     if recommendation.projected_steps_to_target is not None:
         parts.append(
             f"После добавления ссылки путь до цели сократится до {recommendation.projected_steps_to_target} "
             f"{step_word_after_preposition(recommendation.projected_steps_to_target)}."
         )
     if recommendation.anchor_hint:
-        parts.append(f"В анкоре можно использовать: {recommendation.anchor_hint}.")
+        parts.append(f"В анкере можно использовать: {recommendation.anchor_hint}.")
     return " ".join(parts)
 
 
@@ -140,7 +157,7 @@ def should_render_multiple_candidates(context: AnalysisMessageContext) -> bool:
 
 
 def build_soft_candidates_message(context: AnalysisMessageContext) -> str:
-    return f"{problem_intro(context)} {soft_candidates_sentence(context.placement_recommendations)}"
+    return f"{problem_intro(context)} {soft_candidates_sentence(context)}"
 
 
 def append_soft_candidates_message(message: str, context: AnalysisMessageContext) -> str:
@@ -149,40 +166,82 @@ def append_soft_candidates_message(message: str, context: AnalysisMessageContext
         base = problem_intro(context)
     if base[-1] not in ".!?":
         base += "."
-    return f"{base} {soft_candidates_sentence(context.placement_recommendations)}"
+    return f"{base} {soft_candidates_sentence(context)}"
 
 
-def soft_candidates_sentence(recommendations: list[PlacementRecommendation]) -> str:
+def soft_candidates_sentence(context: AnalysisMessageContext) -> str:
+    recommendations = context.placement_recommendations
     if recommendations and recommendations[0].confidence == "fallback":
-        return fallback_candidates_sentence(recommendations)
+        return fallback_candidates_sentence(context)
 
     top_candidates = recommendations[:3]
-    candidate_labels = [soft_candidate_label(recommendation) for recommendation in top_candidates]
+    candidate_labels = [
+        soft_candidate_label(recommendation, index=index, context=context)
+        for index, recommendation in enumerate(top_candidates, start=1)
+    ]
     labels = "; ".join(candidate_labels)
     placement_hint = top_candidates[0].placement_hint.rstrip(".")
     return (
-        "Сильного семантически точного донора сервис не подтвердил, поэтому ниже показаны до 3 проверенных кандидатов "
-        f"в пределах 1-3 шагов от стартовой страницы: {labels}. "
-        f"{placement_hint}. Это сократит путь до цели и даст пользователю более короткий и понятный маршрут."
+        "Сильного семантически точного донора не найдено, поэтому ниже показаны до 3 кандидатов в порядке приоритета: "
+        f"{labels}. {placement_hint}. Они отсортированы от более релевантного к менее надежному и требуют ручной проверки."
     )
 
 
-def fallback_candidates_sentence(recommendations: list[PlacementRecommendation]) -> str:
-    top_candidates = recommendations[:3]
-    candidate_labels = [soft_candidate_label(recommendation) for recommendation in top_candidates]
+def fallback_candidates_sentence(context: AnalysisMessageContext) -> str:
+    top_candidates = context.placement_recommendations[:3]
+    candidate_labels = [
+        soft_candidate_label(recommendation, index=index, context=context)
+        for index, recommendation in enumerate(top_candidates, start=1)
+    ]
     labels = "; ".join(candidate_labels)
     placement_hint = top_candidates[0].placement_hint.rstrip(".")
     return (
-        "Сервис не смог подтвердить путь обходом, поэтому ниже показаны до 3 резервных URL-кандидатов "
-        f"из близкой структурной ветки цели на глубине 1-3 уровней: {labels}. "
-        f"{placement_hint}. Эти варианты нужно проверить вручную на странице, но они лучше пустого ответа без кандидатов."
+        "Ниже показаны до 3 резервных URL-кандидатов в порядке приоритета: "
+        f"{labels}. {placement_hint}. Эти варианты нужно проверить вручную на странице, и они не равнозначны: первый кандидат наиболее сильный, следующие слабее."
     )
 
 
-def soft_candidate_label(recommendation: PlacementRecommendation) -> str:
+def soft_candidate_label(
+    recommendation: PlacementRecommendation,
+    *,
+    index: int | None = None,
+    context: AnalysisMessageContext | None = None,
+) -> str:
+    prefix = f"{index}) " if index is not None else ""
+    details: list[str] = []
+    depth_label = candidate_depth_label(recommendation, context=context)
+    if depth_label:
+        details.append(depth_label)
+    reason_label = candidate_reason_label(recommendation)
+    if reason_label:
+        details.append(reason_label)
+    if not details:
+        return f"{prefix}{recommendation.source_url}"
+    return f"{prefix}{recommendation.source_url} ({'; '.join(details)})"
+
+
+def candidate_depth_label(
+    recommendation: PlacementRecommendation,
+    *,
+    context: AnalysisMessageContext | None = None,
+) -> str | None:
     if recommendation.source_depth is None:
-        return recommendation.source_url
-    return f"{recommendation.source_url} ({recommendation.source_depth} {step_word(recommendation.source_depth)})"
+        return None
+    if context is not None and crawl_is_inconclusive(context):
+        return f"глубина в текущем запуске: {recommendation.source_depth}"
+    return f"глубина: {recommendation.source_depth}"
+
+
+def candidate_reason_label(recommendation: PlacementRecommendation) -> str | None:
+    reason = normalize_message(recommendation.reason).rstrip(".")
+    if not reason:
+        return None
+    if len(reason) > 110:
+        reason = reason[:107].rstrip(" ,.;:") + "..."
+    first_token = reason.split(maxsplit=1)[0]
+    if len(first_token) > 1 and (first_token.isupper() or any(char.isdigit() for char in first_token)):
+        return reason
+    return reason[0].lower() + reason[1:] if len(reason) > 1 else reason.lower()
 
 
 def recommendation_sentence(recommendation: PlacementRecommendation) -> str:
@@ -202,13 +261,16 @@ def recommendation_sentence(recommendation: PlacementRecommendation) -> str:
         intro = f"Лучший URL для прямой ссылки: {recommendation.source_url}."
 
     parts = [intro, recommendation.placement_hint.rstrip(".") + "."]
+    reason = candidate_reason_label(recommendation)
+    if reason:
+        parts.append(f"Почему выбран именно он: {reason}.")
     if recommendation.projected_steps_to_target is not None:
         parts.append(
             f"После добавления ссылки путь до цели сократится до {recommendation.projected_steps_to_target} "
             f"{step_word_after_preposition(recommendation.projected_steps_to_target)}."
         )
     if recommendation.anchor_hint:
-        parts.append(f"В анкоре можно использовать: {recommendation.anchor_hint}.")
+        parts.append(f"В анкере можно использовать: {recommendation.anchor_hint}.")
     return " ".join(parts)
 
 
@@ -229,7 +291,7 @@ def build_access_issue_message(context: AnalysisMessageContext) -> str:
         "Перелинковка выглядит слабой, но сервис не смог подтвердить путь до цели: "
         f"{html_mode}, {sitemap_mode}, однако сайт не отдал достаточно данных для обхода. "
         "Из-за этого целевая страница может оставаться глубокой, получать меньше внутреннего веса и хуже находиться пользователем. "
-        "Сначала нужно открыть доступ к HTML-страницам и sitemap, иначе сервис не сможет надежно подобрать страницу-донор."
+        "Сначала нужно открыть доступ к HTML-страницам и sitemap, иначе сервис не сможет надежно подобрать страницу-донора."
     )
 
 

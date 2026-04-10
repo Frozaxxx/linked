@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from urllib.parse import urlsplit
 
 from app.services.frontier import CrawlNode, prioritize, score_link
@@ -12,6 +13,7 @@ from app.settings import get_settings
 
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 class InternalLinkingVerificationMixin:
@@ -64,13 +66,25 @@ class InternalLinkingVerificationMixin:
         if not remaining:
             return verified
 
+        if not self._is_allowed_by_robots(self._start_url):
+            logger.warning("Skipping candidate depth verification because start URL is blocked by robots.txt: %s", self._start_url)
+            return verified
+
         current_level: list[CrawlNode] = [CrawlNode(url=self._start_url, depth=0, path=[self._start_url])]
         visited: set[str] = {self._start_url}
         while current_level and remaining:
             if self._budget_exhausted():
+                logger.info(
+                    "Candidate depth verification stopped because the analysis budget was exhausted: remaining_candidates=%s",
+                    len(remaining),
+                )
                 break
             level_candidates: dict[str, CrawlNode] = {}
-            tasks = [asyncio.create_task(self._fetch_node(client, node)) for node in self._limit_nodes(current_level)]
+            limited_level = self._limit_nodes(
+                current_level,
+                depth=current_level[0].depth if current_level else 0,
+            )
+            tasks = [asyncio.create_task(self._fetch_node(client, node)) for node in limited_level]
             try:
                 for task in asyncio.as_completed(tasks):
                     node, page = await task
@@ -96,9 +110,12 @@ class InternalLinkingVerificationMixin:
                             self._cancel_pending(tasks)
                             break
                     if node.depth >= max_source_depth:
+                        self._crawl_diagnostics.depth_cutoff = True
                         continue
                     for link in page.links:
                         if not is_internal_url(link.url, self._allowed_host):
+                            continue
+                        if not self._is_allowed_by_robots(link.url):
                             continue
                         if self._target.url and self._target.url_matches(link.url):
                             continue
@@ -129,8 +146,18 @@ class InternalLinkingVerificationMixin:
                 if not remaining:
                     break
             finally:
-                await asyncio.gather(*tasks, return_exceptions=True)
-            current_level = self._limit_nodes(prioritize(list(level_candidates.values())))
+                await self._gather_tasks_with_logging(tasks, context="candidate depth verification")
+            next_level = prioritize(list(level_candidates.values()))
+            current_level = self._limit_nodes(
+                next_level,
+                depth=next_level[0].depth if next_level else 0,
+            )
+        logger.info(
+            "Candidate depth verification finished: requested=%s verified=%s unresolved=%s",
+            len(candidate_urls),
+            len(verified),
+            len(remaining),
+        )
         return verified
 
     async def _verify_target_path(
@@ -146,6 +173,9 @@ class InternalLinkingVerificationMixin:
             return TargetVerificationResult()
         if self._target.url_matches(self._start_url):
             return TargetVerificationResult(steps_to_target=0, path=[self._start_url])
+        if not self._is_allowed_by_robots(self._start_url):
+            logger.warning("Skipping target path verification because start URL is blocked by robots.txt: %s", self._start_url)
+            return TargetVerificationResult()
 
         current_level: list[CrawlNode] = [CrawlNode(url=self._start_url, depth=0, path=[self._start_url])]
         visited: set[str] = {self._start_url}
@@ -153,10 +183,12 @@ class InternalLinkingVerificationMixin:
         batch_size = max(settings.max_crawl_level_size, 1)
         while current_level:
             if self._budget_exhausted(reserve_seconds=reserve_seconds):
+                logger.info("Target path verification stopped because the analysis budget was exhausted.")
                 break
             level_candidates: dict[str, CrawlNode] = {}
             for offset in range(0, len(current_level), batch_size):
                 if self._budget_exhausted(reserve_seconds=reserve_seconds):
+                    logger.info("Target path verification stopped during batch processing because the analysis budget was exhausted.")
                     return TargetVerificationResult(pages_fetched=fetched_count)
                 tasks = [asyncio.create_task(self._fetch_node(client, node)) for node in current_level[offset : offset + batch_size]]
                 try:
@@ -185,10 +217,13 @@ class InternalLinkingVerificationMixin:
                                 pages_fetched=fetched_count,
                             )
                         if node.depth >= max_depth:
+                            self._crawl_diagnostics.depth_cutoff = True
                             continue
                         next_depth = node.depth + 1
                         for link in page.links:
                             if not is_internal_url(link.url, self._allowed_host):
+                                continue
+                            if not self._is_allowed_by_robots(link.url):
                                 continue
                             discovered_urls.add(link.url)
                             if self._target.url_matches(link.url):
@@ -206,6 +241,11 @@ class InternalLinkingVerificationMixin:
                                 path=node.path + [link.url],
                             )
                 finally:
-                    await asyncio.gather(*tasks, return_exceptions=True)
+                    await self._gather_tasks_with_logging(tasks, context="target path verification")
             current_level = list(level_candidates.values())
+        logger.info(
+            "Target path verification finished without a confirmed path: pages_fetched=%s max_depth=%s",
+            fetched_count,
+            max_depth,
+        )
         return TargetVerificationResult(pages_fetched=fetched_count)

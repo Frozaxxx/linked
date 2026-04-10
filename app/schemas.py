@@ -108,6 +108,15 @@ class AnalyzeTimings(BaseModel):
     sitemap_completed: bool
 
 
+class CrawlDiagnostics(BaseModel):
+    crawl_max_depth: int
+    budget_exhausted: bool
+    depth_cutoff: bool
+    level_truncated: bool
+    truncated_levels: int
+    truncated_nodes: int
+
+
 class LinkingAnalyzeResponse(BaseModel):
     start_url: str
     target_url: str | None
@@ -122,12 +131,17 @@ class LinkingAnalyzeResponse(BaseModel):
     message_error: str | None = None
     pages_fetched: int
     pages_discovered: int
+    robots_checked: bool
+    robots_available: bool
+    robots_obeyed: bool
+    robots_blocked_urls: int
     sitemap_checked: bool
     found_in_sitemap: bool
     html_fetch_mode: str
     sitemap_fetch_mode: str
     strategy: str
     timings: AnalyzeTimings
+    crawl_diagnostics: CrawlDiagnostics
 
     if PYDANTIC_V2:
         model_config = {
@@ -154,6 +168,10 @@ class LinkingAnalyzeResponse(BaseModel):
                     "message_error": None,
                     "pages_fetched": 7,
                     "pages_discovered": 12,
+                    "robots_checked": True,
+                    "robots_available": True,
+                    "robots_obeyed": True,
+                    "robots_blocked_urls": 0,
                     "sitemap_checked": True,
                     "found_in_sitemap": True,
                     "html_fetch_mode": "playwright",
@@ -164,6 +182,14 @@ class LinkingAnalyzeResponse(BaseModel):
                         "match_ms": 184.231,
                         "sitemap_elapsed_ms": 61.418,
                         "sitemap_completed": False,
+                    },
+                    "crawl_diagnostics": {
+                        "crawl_max_depth": settings.crawl_max_depth,
+                        "budget_exhausted": False,
+                        "depth_cutoff": False,
+                        "level_truncated": False,
+                        "truncated_levels": 0,
+                        "truncated_nodes": 0,
                     },
                 }
             }
@@ -194,6 +220,10 @@ class LinkingAnalyzeResponse(BaseModel):
                     "message_error": None,
                     "pages_fetched": 7,
                     "pages_discovered": 12,
+                    "robots_checked": True,
+                    "robots_available": True,
+                    "robots_obeyed": True,
+                    "robots_blocked_urls": 0,
                     "sitemap_checked": True,
                     "found_in_sitemap": True,
                     "html_fetch_mode": "playwright",
@@ -204,6 +234,14 @@ class LinkingAnalyzeResponse(BaseModel):
                         "match_ms": 184.231,
                         "sitemap_elapsed_ms": 61.418,
                         "sitemap_completed": False,
+                    },
+                    "crawl_diagnostics": {
+                        "crawl_max_depth": settings.crawl_max_depth,
+                        "budget_exhausted": False,
+                        "depth_cutoff": False,
+                        "level_truncated": False,
+                        "truncated_levels": 0,
+                        "truncated_nodes": 0,
                     },
                 }
             }

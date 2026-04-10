@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from time import perf_counter
 
 import httpx
@@ -9,7 +10,9 @@ from app.schemas import LinkingAnalyzeRequest, LinkingAnalyzeResponse
 from app.services.fetcher import AsyncFetcher, FetchSession
 from app.services.frontier import CrawlNode, apply_sitemap_bonus, prioritize, score_link
 from app.services.internal_linking_models import (
+    CrawlDiagnosticsSnapshot,
     LIVE_SITEMAP_STRATEGY,
+    RobotsSnapshot,
     SITEMAP_WAIT_TIMEOUT_SECONDS,
     SitemapSnapshot,
 )
@@ -27,12 +30,14 @@ from app.services.parser import (
     is_internal_url,
     normalize_url,
     parse_html,
+    parse_robots_txt,
     parse_sitemap,
 )
 from app.settings import get_settings
 
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 class InternalLinkingAnalyzer(
@@ -66,6 +71,9 @@ class InternalLinkingAnalyzer(
         self._message_generator = LinkingAnalysisMessageGenerator()
         self._semaphore = asyncio.Semaphore(settings.crawl_concurrency)
         self._deadline_started_at: float | None = None
+        self._crawl_diagnostics = CrawlDiagnosticsSnapshot(crawl_max_depth=settings.crawl_max_depth)
+        self._robots_snapshot = RobotsSnapshot(obeyed=settings.obey_robots_txt)
+        self._robots_policy = None
 
     def _build_placement_recommender(self) -> LinkPlacementRecommender:
         return LinkPlacementRecommender(
@@ -93,8 +101,54 @@ class InternalLinkingAnalyzer(
         )
         self._placement_recommender = self._build_placement_recommender()
 
+    def _is_allowed_by_robots(self, url: str) -> bool:
+        if not settings.obey_robots_txt or self._robots_policy is None:
+            return True
+        allowed = self._robots_policy.is_allowed(url)
+        if not allowed:
+            self._robots_snapshot.blocked_urls.add(url)
+        return allowed
+
+    async def _collect_robots_snapshot(self, client: FetchSession) -> None:
+        if not self._start_url:
+            return
+
+        robots_url = normalize_url("robots.txt", get_site_root(self._start_url), allow_ignored_extensions=True)
+        if not robots_url:
+            return
+
+        self._robots_snapshot.checked = True
+        async with self._semaphore:
+            document = await self._fetcher.fetch(
+                client,
+                robots_url,
+                render_html=False,
+                total_timeout_seconds=self._remaining_fetch_budget_seconds(),
+            )
+
+        if document is None:
+            logger.info("robots.txt is unavailable or could not be fetched: %s", robots_url)
+            return
+
+        self._robots_snapshot.available = True
+        self._robots_policy = parse_robots_txt(
+            document.body,
+            get_site_root(self._start_url),
+            self._allowed_host,
+            settings.robots_user_agent,
+        )
+        self._robots_snapshot.sitemap_urls.update(self._robots_policy.sitemap_urls)
+        logger.info(
+            "robots.txt loaded: start_url=%s sitemap_urls=%s",
+            self._start_url,
+            len(self._robots_snapshot.sitemap_urls),
+        )
+
     async def _resolve_target_metadata(self, client: FetchSession) -> int:
         if not self._requested_target_url or not is_internal_url(self._requested_target_url, self._allowed_host):
+            return 0
+        if not self._is_allowed_by_robots(self._requested_target_url):
+            logger.warning("Requested target URL is blocked by robots.txt: %s", self._requested_target_url)
             return 0
         document = await self._fetcher.fetch(
             client,
@@ -102,9 +156,15 @@ class InternalLinkingAnalyzer(
             total_timeout_seconds=self._remaining_fetch_budget_seconds(),
         )
         if document is None:
+            logger.warning("Failed to fetch requested target URL metadata: %s", self._requested_target_url)
             return 0
         normalized_final_url = normalize_url(document.final_url)
         if not normalized_final_url or not is_internal_url(normalized_final_url, self._allowed_host):
+            logger.warning(
+                "Requested target URL resolved outside of the allowed host: requested=%s final=%s",
+                self._requested_target_url,
+                document.final_url,
+            )
             return 0
         page = parse_html(document.body, normalized_final_url, self._allowed_host)
         equivalent_urls = {self._requested_target_url, normalized_final_url}
@@ -126,23 +186,44 @@ class InternalLinkingAnalyzer(
 
         started_at = perf_counter()
         self._deadline_started_at = started_at
+        self._crawl_diagnostics = CrawlDiagnosticsSnapshot(crawl_max_depth=settings.crawl_max_depth)
+        self._robots_snapshot = RobotsSnapshot(obeyed=settings.obey_robots_txt)
+        self._robots_policy = None
         pages_fetched = 0
         discovered_urls: set[str] = {self._start_url}
         discovered_depths: dict[str, int] = {self._start_url: 0}
         crawled_pages: dict[str, CrawledPageSnapshot] = {}
-        search_depth_limit = settings.good_depth_threshold
+        search_depth_limit = settings.crawl_max_depth
+        logger.info(
+            "Starting internal linking analysis: start_url=%s target_url=%s depth_limit=%s timeout=%s retry_count=%s",
+            self._start_url,
+            self._requested_target_url or self._requested_target_title or self._requested_target_text,
+            search_depth_limit,
+            self._request.timeout_seconds,
+            self._request.retry_count,
+        )
 
         async with self._fetcher.create_client() as client:
+            await self._collect_robots_snapshot(client)
             pages_fetched += await self._resolve_target_metadata(client)
             sitemap = SitemapSnapshot(started_at=perf_counter())
             sitemap_task = asyncio.create_task(self._collect_sitemap_snapshot(client, sitemap))
             try:
-                current_level: list[CrawlNode] = [CrawlNode(url=self._start_url, depth=0, path=[self._start_url])]
+                current_level: list[CrawlNode] = []
+                if self._is_allowed_by_robots(self._start_url):
+                    current_level.append(CrawlNode(url=self._start_url, depth=0, path=[self._start_url]))
+                else:
+                    logger.warning("Start URL is blocked by robots.txt: %s", self._start_url)
                 while current_level:
                     if self._budget_exhausted():
+                        logger.warning("Analysis budget exhausted during BFS traversal: start_url=%s", self._start_url)
                         break
                     level_candidates: dict[str, CrawlNode] = {}
-                    tasks = [asyncio.create_task(self._fetch_node(client, node)) for node in self._limit_nodes(current_level)]
+                    limited_level = self._limit_nodes(
+                        current_level,
+                        depth=current_level[0].depth if current_level else 0,
+                    )
+                    tasks = [asyncio.create_task(self._fetch_node(client, node)) for node in limited_level]
                     try:
                         for task in asyncio.as_completed(tasks):
                             node, page = await task
@@ -183,9 +264,12 @@ class InternalLinkingAnalyzer(
                                     search_depth_limit=search_depth_limit,
                                 )
                             if node.depth >= search_depth_limit:
+                                self._crawl_diagnostics.depth_cutoff = True
                                 continue
                             for link in page.links:
                                 if not is_internal_url(link.url, self._allowed_host):
+                                    continue
+                                if not self._is_allowed_by_robots(link.url):
                                     continue
                                 if self._target.url_matches(link.url):
                                     self._cancel_pending(tasks)
@@ -222,9 +306,12 @@ class InternalLinkingAnalyzer(
                         next_level = list(level_candidates.values())
                         apply_sitemap_bonus(next_level, sitemap.page_urls)
                         discovered_urls.update(level_candidates.keys())
-                        current_level = self._limit_nodes(prioritize(next_level))
+                        current_level = self._limit_nodes(
+                            prioritize(next_level),
+                            depth=next_level[0].depth if next_level else 0,
+                        )
                     finally:
-                        await asyncio.gather(*tasks, return_exceptions=True)
+                        await self._gather_tasks_with_logging(tasks, context="crawl level fetch")
 
                 target_verification = await self._verify_target_path(
                     client=client,
@@ -279,7 +366,7 @@ class InternalLinkingAnalyzer(
             finally:
                 if not sitemap_task.done():
                     sitemap_task.cancel()
-                await asyncio.gather(sitemap_task, return_exceptions=True)
+                await self._gather_tasks_with_logging([sitemap_task], context="sitemap collection")
 
     async def _await_sitemap_for_recommendations(
         self,
@@ -298,15 +385,20 @@ class InternalLinkingAnalyzer(
         if remaining_budget is not None:
             usable_budget = remaining_budget - reserve_seconds
             if usable_budget <= 0:
+                logger.info("Skipping sitemap wait because no budget remains for recommendations.")
                 return
             timeout = min(timeout, usable_budget)
         try:
             await asyncio.wait_for(asyncio.shield(sitemap_task), timeout=timeout)
         except asyncio.TimeoutError:
+            logger.info("Timed out while waiting for sitemap recommendations: timeout=%.3fs", timeout)
             return
 
     async def _collect_sitemap_snapshot(self, client: FetchSession, sitemap: SitemapSnapshot) -> None:
-        sitemap_queue = [normalize_url("sitemap.xml", get_site_root(self._start_url), allow_ignored_extensions=True)]
+        sitemap_queue = list(self._robots_snapshot.sitemap_urls)
+        fallback_sitemap = normalize_url("sitemap.xml", get_site_root(self._start_url), allow_ignored_extensions=True)
+        if fallback_sitemap and fallback_sitemap not in sitemap_queue:
+            sitemap_queue.append(fallback_sitemap)
         checked: set[str] = set()
         try:
             while sitemap_queue:
@@ -325,10 +417,12 @@ class InternalLinkingAnalyzer(
                         total_timeout_seconds=self._remaining_fetch_budget_seconds(),
                     )
                 if document is None:
+                    logger.info("Sitemap fetch returned no document: %s", sitemap_url)
                     continue
                 parsed = parse_sitemap(document.body, self._allowed_host)
-                sitemap.page_urls.update(parsed.page_urls)
-                if self._target.url and any(self._target.url_matches(url) for url in parsed.page_urls):
+                allowed_page_urls = {url for url in parsed.page_urls if self._is_allowed_by_robots(url)}
+                sitemap.page_urls.update(allowed_page_urls)
+                if self._target.url and any(self._target.url_matches(url) for url in allowed_page_urls):
                     sitemap.found_target = True
                 for nested_sitemap in parsed.nested_sitemaps:
                     if nested_sitemap not in checked:
@@ -336,8 +430,18 @@ class InternalLinkingAnalyzer(
             sitemap.completed = True
         finally:
             sitemap.finished_at = perf_counter()
+            logger.info(
+                "Sitemap collection finished: checked=%s page_urls=%s nested_remaining=%s found_target=%s completed=%s",
+                len(checked),
+                len(sitemap.page_urls),
+                len(sitemap_queue),
+                sitemap.found_target,
+                sitemap.completed,
+            )
 
     async def _fetch_node(self, client: FetchSession, node: CrawlNode) -> tuple[CrawlNode, ParsedPage | None]:
+        if not self._is_allowed_by_robots(node.url):
+            return node, None
         async with self._semaphore:
             document = await self._fetcher.fetch(
                 client,
@@ -348,6 +452,8 @@ class InternalLinkingAnalyzer(
             return node, None
         normalized_final_url = normalize_url(document.final_url)
         if not normalized_final_url or not is_internal_url(normalized_final_url, self._allowed_host):
+            return node, None
+        if not self._is_allowed_by_robots(normalized_final_url):
             return node, None
         page = parse_html(document.body, normalized_final_url, self._allowed_host)
         if normalized_final_url != node.url:

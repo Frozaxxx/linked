@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from urllib.parse import urlsplit, urlunsplit
 
-from app.schemas import LinkingAnalyzeResponse
+from app.schemas import CrawlDiagnostics, LinkingAnalyzeResponse
 from app.services.fetcher import FetchSession
 from app.services.internal_linking_models import SITEMAP_RECOMMENDATION_RANK_LIMIT
 from app.services.link_placement import CrawledPageSnapshot
@@ -14,6 +15,7 @@ from app.settings import get_settings
 
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 class InternalLinkingResponseMixin:
@@ -44,8 +46,8 @@ class InternalLinkingResponseMixin:
                 steps_to_target=steps_to_target,
                 path=path,
                 crawled_pages=crawled_pages,
-                )
             )
+        )
 
         if not placement_recommendations and discovered_depths:
             placement_recommendations = self._build_depth_based_recommendations(
@@ -196,10 +198,51 @@ class InternalLinkingResponseMixin:
                 found_in_sitemap=found_in_sitemap,
                 html_fetch_mode=client.html_fetch_mode,
                 sitemap_fetch_mode=client.sitemap_fetch_mode,
+                crawl_max_depth=self._crawl_diagnostics.crawl_max_depth,
+                budget_exhausted=self._crawl_diagnostics.budget_exhausted,
+                depth_cutoff=self._crawl_diagnostics.depth_cutoff,
+                level_truncated=self._crawl_diagnostics.level_truncated,
+                truncated_levels=self._crawl_diagnostics.truncated_levels,
+                truncated_nodes=self._crawl_diagnostics.truncated_nodes,
                 path=path,
                 placement_recommendations=placement_recommendations,
             )
         )
+        if (
+            self._crawl_diagnostics.budget_exhausted
+            or self._crawl_diagnostics.depth_cutoff
+            or self._crawl_diagnostics.level_truncated
+        ):
+            logger.warning(
+                "Analysis completed with crawl limitations: start_url=%s target_url=%s budget_exhausted=%s depth_cutoff=%s level_truncated=%s truncated_levels=%s truncated_nodes=%s",
+                self._start_url,
+                self._requested_target_url or self._target.url,
+                self._crawl_diagnostics.budget_exhausted,
+                self._crawl_diagnostics.depth_cutoff,
+                self._crawl_diagnostics.level_truncated,
+                self._crawl_diagnostics.truncated_levels,
+                self._crawl_diagnostics.truncated_nodes,
+            )
+        logger.info(
+            "Analysis response built: start_url=%s target_url=%s found=%s status=%s steps=%s matched_by=%s pages_fetched=%s pages_discovered=%s recommendations=%s sitemap_checked=%s found_in_sitemap=%s",
+            self._start_url,
+            self._requested_target_url or self._target.url,
+            found,
+            status.value,
+            steps_to_target,
+            ",".join(matched_by) if matched_by else "-",
+            pages_fetched,
+            pages_discovered,
+            len(placement_recommendations),
+            sitemap_checked,
+            found_in_sitemap,
+        )
+        if not found and not placement_recommendations:
+            logger.warning(
+                "Analysis produced no placement recommendations: start_url=%s target_url=%s",
+                self._start_url,
+                self._requested_target_url or self._target.url,
+            )
 
         return LinkingAnalyzeResponse(
             start_url=self._start_url,
@@ -218,12 +261,24 @@ class InternalLinkingResponseMixin:
             message_error=generated_message.error,
             pages_fetched=pages_fetched,
             pages_discovered=pages_discovered,
+            robots_checked=self._robots_snapshot.checked,
+            robots_available=self._robots_snapshot.available,
+            robots_obeyed=self._robots_snapshot.obeyed,
+            robots_blocked_urls=len(self._robots_snapshot.blocked_urls),
             sitemap_checked=sitemap_checked,
             found_in_sitemap=found_in_sitemap,
             html_fetch_mode=client.html_fetch_mode,
             sitemap_fetch_mode=client.sitemap_fetch_mode,
             strategy=strategy,
             timings=timings,
+            crawl_diagnostics=CrawlDiagnostics(
+                crawl_max_depth=self._crawl_diagnostics.crawl_max_depth,
+                budget_exhausted=self._crawl_diagnostics.budget_exhausted,
+                depth_cutoff=self._crawl_diagnostics.depth_cutoff,
+                level_truncated=self._crawl_diagnostics.level_truncated,
+                truncated_levels=self._crawl_diagnostics.truncated_levels,
+                truncated_nodes=self._crawl_diagnostics.truncated_nodes,
+            ),
         )
 
     @staticmethod
@@ -284,7 +339,7 @@ class InternalLinkingResponseMixin:
                 fetched_count += 1
                 self._remember_crawled_page(crawled_pages, snapshot)
         finally:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            await self._gather_tasks_with_logging(tasks, context="recommendation snapshot fetch")
         return fetched_count
 
     def _sanitize_placement_recommendations(self, recommendations: list) -> list:
@@ -292,6 +347,8 @@ class InternalLinkingResponseMixin:
         seen_urls: set[str] = set()
         for recommendation in recommendations:
             if self._target.url_matches(recommendation.source_url) or recommendation.source_url in seen_urls:
+                continue
+            if not self._recommendation_url_allowed(recommendation.source_url):
                 continue
             if not self._placement_recommender._is_allowed_source_depth(recommendation.source_depth):
                 continue
@@ -333,9 +390,15 @@ class InternalLinkingResponseMixin:
             parent_path = "/" + "/".join(parts[:end])
             candidate = urlunsplit((parsed.scheme, parsed.netloc, parent_path, "", ""))
             normalized = normalize_url(candidate)
-            if normalized and normalized not in candidates:
+            if normalized and self._recommendation_url_allowed(normalized) and normalized not in candidates:
                 candidates.append(normalized)
         return candidates
+
+    def _recommendation_url_allowed(self, url: str) -> bool:
+        checker = getattr(self, "_is_allowed_by_robots", None)
+        if checker is None:
+            return True
+        return checker(url)
 
     def _rank_sitemap_candidate_urls(
         self,
@@ -362,6 +425,8 @@ class InternalLinkingResponseMixin:
         *,
         depth: int | None = None,
     ) -> CrawledPageSnapshot | None:
+        if not self._is_allowed_by_robots(url):
+            return None
         async with self._semaphore:
             document = await self._fetcher.fetch(
                 client,
@@ -372,6 +437,8 @@ class InternalLinkingResponseMixin:
             return None
         normalized_final_url = normalize_url(document.final_url)
         if not normalized_final_url or not is_internal_url(normalized_final_url, self._allowed_host):
+            return None
+        if not self._is_allowed_by_robots(normalized_final_url):
             return None
         if self._target.url and self._target.url_matches(normalized_final_url):
             return None

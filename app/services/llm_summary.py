@@ -49,6 +49,12 @@ class AnalysisMessageContext:
     found_in_sitemap: bool
     html_fetch_mode: str
     sitemap_fetch_mode: str
+    crawl_max_depth: int
+    budget_exhausted: bool
+    depth_cutoff: bool
+    level_truncated: bool
+    truncated_levels: int
+    truncated_nodes: int
     path: list[str]
     placement_recommendations: list[PlacementRecommendation]
 
@@ -71,7 +77,10 @@ class LinkingAnalysisMessageGenerator:
 
         if self._llm is None:
             if self._disabled_reason:
-                logger.warning("GigaChat отключен, будет использовано резервное сообщение: %s", self._disabled_reason)
+                logger.warning(
+                    "GigaChat отключен, будет использовано резервное сообщение: %s",
+                    self._disabled_reason,
+                )
             return GeneratedAnalysisMessage(
                 text=build_fallback_message(context),
                 source="fallback",
@@ -112,7 +121,7 @@ class LinkingAnalysisMessageGenerator:
         prompt = LinkingAnalysisMessageGenerator._resolve_prompt(context)
         if context.target_title:
             prompt += (
-                f"\nЕсли упоминаешь заголовок целевой страницы, используй его без изменений: "
+                "\nЕсли упоминаешь заголовок целевой страницы, используй его без изменений: "
                 f"{json.dumps(context.target_title, ensure_ascii=False)}."
             )
         else:
@@ -120,6 +129,7 @@ class LinkingAnalysisMessageGenerator:
                 "\nЕсли target_title пустой, не придумывай заголовок страницы. "
                 "Называй ее только целевой страницей."
             )
+
         if context.placement_recommendations:
             if should_render_multiple_candidates(context):
                 prompt += (
@@ -140,6 +150,15 @@ class LinkingAnalysisMessageGenerator:
                 "\nЕсли placement_recommendations пустой, не придумывай страницы и URL."
                 " Дай только общую рекомендацию по улучшению внутренней перелинковки."
             )
+
+        if context.budget_exhausted or context.level_truncated:
+            prompt += (
+                "\nЕсли budget_exhausted=true или level_truncated=true, не пиши, что плохая перелинковка уже доказана."
+                " Формулируй аккуратно: текущий обход не подтвердил короткий путь, но обход был неполным."
+                " Не утверждай, что shortest path гарантированно отсутствует."
+                " Не перечисляй внутренние технические детали вроде budget, level_truncated, truncated_nodes или количества URL вне очереди."
+            )
+
         return f"{prompt}\n\nДанные анализа:\n{json.dumps(payload, ensure_ascii=False, indent=2)}"
 
     @staticmethod

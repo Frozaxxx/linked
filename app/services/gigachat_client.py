@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from app.settings import get_settings
@@ -11,6 +12,7 @@ except ImportError:  # pragma: no cover - optional runtime dependency until inst
 
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 def create_gigachat_client(*, temperature: float | None = None) -> tuple[Any, str | None]:
@@ -40,7 +42,11 @@ def create_gigachat_client(*, temperature: float | None = None) -> tuple[Any, st
         "verify_ssl_certs": settings.gigachat_verify_ssl_certs,
         "ca_bundle_file": settings.gigachat_ca_bundle_file,
     }
-    client = GigaChat(**{key: value for key, value in client_kwargs.items() if value is not None})
+    try:
+        client = GigaChat(**{key: value for key, value in client_kwargs.items() if value is not None})
+    except Exception as exc:  # pragma: no cover - depends on external API/runtime setup
+        logger.exception("Failed to initialize GigaChat client.")
+        return None, f"Не удалось инициализировать GigaChat client: {exc}"
     return client, None
 
 

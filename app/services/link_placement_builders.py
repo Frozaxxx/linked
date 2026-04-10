@@ -4,6 +4,7 @@ from app.services.frontier import score_link
 from app.services.link_placement_models import (
     MAX_RECOMMENDATIONS,
     MAX_RECOMMENDATION_SOURCE_DEPTH,
+    MIN_RECOMMENDATION_SOURCE_DEPTH,
     MIN_PATH_CONTEXT_SCORE,
     CrawledPageSnapshot,
     PlacementRecommendation,
@@ -352,3 +353,10 @@ class LinkPlacementBuilderMixin:
                 anchor_hint=self._anchor_hint(),
             )
             self._remember_candidate(ranked, recommendation, score)
+
+    @staticmethod
+    def _is_allowed_source_depth(source_depth: int | None) -> bool:
+        return (
+            source_depth is not None
+            and MIN_RECOMMENDATION_SOURCE_DEPTH <= source_depth <= MAX_RECOMMENDATION_SOURCE_DEPTH
+        )

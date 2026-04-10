@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from time import perf_counter
 
 from app.schemas import AnalyzeTimings, OptimizationStatus
@@ -14,12 +15,16 @@ from app.settings import get_settings
 
 settings = get_settings()
 FETCH_BUDGET_SAFETY_MARGIN_SECONDS = 0.5
+logger = logging.getLogger(__name__)
 
 
 class InternalLinkingRuntimeMixin:
     def _budget_exhausted(self, *, reserve_seconds: float = 0.0) -> bool:
         remaining = self._remaining_budget_seconds()
-        return remaining is not None and remaining <= reserve_seconds
+        exhausted = remaining is not None and remaining <= reserve_seconds
+        if exhausted and getattr(self, "_crawl_diagnostics", None) is not None:
+            self._crawl_diagnostics.budget_exhausted = True
+        return exhausted
 
     def _recommendation_budget_reserve_seconds(self) -> float:
         total_budget = max(settings.analyze_time_budget_seconds, 0.0)
@@ -41,10 +46,14 @@ class InternalLinkingRuntimeMixin:
             return None
         return max(remaining - FETCH_BUDGET_SAFETY_MARGIN_SECONDS, 0.0)
 
-    @staticmethod
-    def _limit_nodes(nodes: list) -> list:
+    def _limit_nodes(self, nodes: list, *, depth: int) -> list:
         if len(nodes) <= settings.max_crawl_level_size:
             return nodes
+        diagnostics = getattr(self, "_crawl_diagnostics", None)
+        if diagnostics is not None:
+            diagnostics.level_truncated = True
+            diagnostics.truncated_levels += 1
+            diagnostics.truncated_nodes += len(nodes) - settings.max_crawl_level_size
         return nodes[: settings.max_crawl_level_size]
 
     @staticmethod
@@ -76,6 +85,8 @@ class InternalLinkingRuntimeMixin:
     def _resolve_optimization_status(*, found: bool, steps_to_target: int | None) -> OptimizationStatus:
         if found and steps_to_target is not None and steps_to_target <= settings.good_depth_threshold:
             return OptimizationStatus.GOOD
+        if not found:
+            return OptimizationStatus.NOT_FOUND
         return OptimizationStatus.BAD
 
     @staticmethod
@@ -83,6 +94,19 @@ class InternalLinkingRuntimeMixin:
         for task in tasks:
             if not task.done():
                 task.cancel()
+
+    @staticmethod
+    async def _gather_tasks_with_logging(tasks: list[asyncio.Task], *, context: str) -> None:
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for result in results:
+            if isinstance(result, asyncio.CancelledError):
+                continue
+            if isinstance(result, BaseException):
+                logger.error(
+                    "Background task failed during %s.",
+                    context,
+                    exc_info=(type(result), result, result.__traceback__),
+                )
 
     def _build_timings(
         self,

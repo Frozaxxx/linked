@@ -25,11 +25,17 @@ class Settings(BaseSettings):
     analyze_summary: str = "Проверить внутреннюю перелинковку до целевой страницы"
 
     request_timeout_seconds: float = 10.0
-    request_retry_count: int = 2
-    crawl_concurrency: int = 8
+    request_retry_count: int = 1
+    crawl_concurrency: int = 12
     good_depth_threshold: int = 4
-    analyze_time_budget_seconds: float = 45.0
-    max_crawl_level_size: int = 64
+    crawl_max_depth: int = 4
+    analyze_time_budget_seconds: float = 120.0
+    max_crawl_level_size: int = 300
+    obey_robots_txt: bool = True
+    robots_user_agent: str = "*"
+    log_level: str = "INFO"
+    log_file_max_bytes: int = 2_000_000
+    log_file_backup_count: int = 3
 
     gigachat_enabled: bool = True
     gigachat_credentials: str | None = None
