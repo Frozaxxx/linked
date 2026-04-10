@@ -81,6 +81,11 @@ async def test_fetch_marks_html_mode_as_playwright_when_browser_context_exists(
 
     assert document is not None
     assert browser_session.html_fetch_mode == "playwright"
+    assert browser_session.fetch_stats.playwright_session_available is True
+    assert browser_session.fetch_stats.html_playwright_attempts == 1
+    assert browser_session.fetch_stats.html_playwright_successes == 1
+    assert browser_session.fetch_stats.html_playwright_failures == 0
+    assert browser_session.fetch_stats.html_http_attempts == 0
 
 
 @pytest.mark.asyncio
@@ -103,6 +108,11 @@ async def test_fetch_marks_html_mode_as_http_only_without_browser_context(http_s
 
     assert document is not None
     assert http_session.html_fetch_mode == "http-only"
+    assert http_session.fetch_stats.playwright_session_available is False
+    assert http_session.fetch_stats.html_playwright_attempts == 0
+    assert http_session.fetch_stats.html_http_attempts == 1
+    assert http_session.fetch_stats.html_http_successes == 1
+    assert http_session.fetch_stats.html_http_failures == 0
 
 
 @pytest.mark.asyncio
@@ -126,6 +136,9 @@ async def test_fetch_marks_sitemap_mode_as_http_only(browser_session: FetchSessi
 
     assert document is not None
     assert browser_session.sitemap_fetch_mode == "http-only"
+    assert browser_session.fetch_stats.sitemap_http_attempts == 1
+    assert browser_session.fetch_stats.sitemap_http_successes == 1
+    assert browser_session.fetch_stats.sitemap_http_failures == 0
 
 
 @pytest.mark.asyncio
@@ -152,6 +165,13 @@ async def test_fetch_falls_back_to_http_when_playwright_request_fails(browser_se
     assert browser_session.html_fetch_mode == "mixed"
     assert fetcher._fetch_with_browser.await_count == 1
     assert fetcher._fetch_with_http.await_count == 1
+    assert browser_session.fetch_stats.html_playwright_attempts == 1
+    assert browser_session.fetch_stats.html_playwright_successes == 0
+    assert browser_session.fetch_stats.html_playwright_failures == 1
+    assert browser_session.fetch_stats.html_http_attempts == 1
+    assert browser_session.fetch_stats.html_http_successes == 1
+    assert browser_session.fetch_stats.html_http_fallback_successes == 1
+    assert browser_session.fetch_stats.html_http_fallback_failures == 0
 
 
 @pytest.mark.asyncio
@@ -162,3 +182,4 @@ async def test_create_client_falls_back_to_http_when_browser_session_does_not_st
     async with fetcher.create_client() as session:
         assert session.browser_context is None
         assert session.html_fetch_mode == "not-requested"
+        assert session.fetch_stats.playwright_session_available is False

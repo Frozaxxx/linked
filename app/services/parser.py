@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import logging
 import re
 import xml.etree.ElementTree as ET
@@ -208,9 +209,12 @@ def parse_html(html: str, page_url: str, allowed_host: str) -> ParsedPage:
     )
 
 
-def parse_sitemap(xml_body: str, allowed_host: str) -> ParsedSitemap:
+def parse_sitemap(xml_body: str | bytes, allowed_host: str) -> ParsedSitemap:
+    payload = _prepare_sitemap_payload(xml_body)
+    if payload is None:
+        return ParsedSitemap(page_urls=[], nested_sitemaps=[])
     try:
-        root = ET.fromstring(xml_body)
+        root = ET.fromstring(payload)
     except ET.ParseError as exc:
         logger.warning("Failed to parse sitemap XML: %s", exc)
         return ParsedSitemap(page_urls=[], nested_sitemaps=[])
@@ -239,6 +243,18 @@ def parse_sitemap(xml_body: str, allowed_host: str) -> ParsedSitemap:
             nested_sitemaps.append(normalized)
 
     return ParsedSitemap(page_urls=page_urls, nested_sitemaps=nested_sitemaps)
+
+
+def _prepare_sitemap_payload(xml_body: str | bytes) -> str | bytes | None:
+    if isinstance(xml_body, str):
+        return xml_body
+    if xml_body.startswith(b"\x1f\x8b"):
+        try:
+            return gzip.decompress(xml_body)
+        except (OSError, EOFError) as exc:
+            logger.warning("Failed to decompress gzip sitemap: %s", exc)
+            return None
+    return xml_body
 
 
 def parse_robots_txt(xml_body: str, base_url: str, allowed_host: str, user_agent: str) -> ParsedRobotsTxt:

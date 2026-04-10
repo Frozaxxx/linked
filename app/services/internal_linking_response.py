@@ -5,7 +5,7 @@ import logging
 
 from urllib.parse import urlsplit, urlunsplit
 
-from app.schemas import CrawlDiagnostics, LinkingAnalyzeResponse
+from app.schemas import CrawlDiagnostics, FetchStats, LinkingAnalyzeResponse
 from app.services.fetcher import FetchSession
 from app.services.internal_linking_models import SITEMAP_RECOMMENDATION_RANK_LIMIT
 from app.services.link_placement import CrawledPageSnapshot
@@ -237,6 +237,22 @@ class InternalLinkingResponseMixin:
             sitemap_checked,
             found_in_sitemap,
         )
+        logger.info(
+            "Fetch stats: start_url=%s playwright_available=%s html_playwright_attempts=%s html_playwright_successes=%s html_playwright_failures=%s html_http_attempts=%s html_http_successes=%s html_http_failures=%s html_http_fallback_successes=%s html_http_fallback_failures=%s sitemap_http_attempts=%s sitemap_http_successes=%s sitemap_http_failures=%s",
+            self._start_url,
+            client.fetch_stats.playwright_session_available,
+            client.fetch_stats.html_playwright_attempts,
+            client.fetch_stats.html_playwright_successes,
+            client.fetch_stats.html_playwright_failures,
+            client.fetch_stats.html_http_attempts,
+            client.fetch_stats.html_http_successes,
+            client.fetch_stats.html_http_failures,
+            client.fetch_stats.html_http_fallback_successes,
+            client.fetch_stats.html_http_fallback_failures,
+            client.fetch_stats.sitemap_http_attempts,
+            client.fetch_stats.sitemap_http_successes,
+            client.fetch_stats.sitemap_http_failures,
+        )
         if not found and not placement_recommendations:
             logger.warning(
                 "Analysis produced no placement recommendations: start_url=%s target_url=%s",
@@ -250,6 +266,20 @@ class InternalLinkingResponseMixin:
             fetch_summary=self._build_fetch_summary(
                 html_fetch_mode=client.html_fetch_mode,
                 sitemap_fetch_mode=client.sitemap_fetch_mode,
+            ),
+            fetch_stats=FetchStats(
+                playwright_session_available=client.fetch_stats.playwright_session_available,
+                html_playwright_attempts=client.fetch_stats.html_playwright_attempts,
+                html_playwright_successes=client.fetch_stats.html_playwright_successes,
+                html_playwright_failures=client.fetch_stats.html_playwright_failures,
+                html_http_attempts=client.fetch_stats.html_http_attempts,
+                html_http_successes=client.fetch_stats.html_http_successes,
+                html_http_failures=client.fetch_stats.html_http_failures,
+                html_http_fallback_successes=client.fetch_stats.html_http_fallback_successes,
+                html_http_fallback_failures=client.fetch_stats.html_http_fallback_failures,
+                sitemap_http_attempts=client.fetch_stats.sitemap_http_attempts,
+                sitemap_http_successes=client.fetch_stats.sitemap_http_successes,
+                sitemap_http_failures=client.fetch_stats.sitemap_http_failures,
             ),
             found=found,
             matched_by=matched_by,

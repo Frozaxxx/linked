@@ -117,10 +117,26 @@ class CrawlDiagnostics(BaseModel):
     truncated_nodes: int
 
 
+class FetchStats(BaseModel):
+    playwright_session_available: bool
+    html_playwright_attempts: int
+    html_playwright_successes: int
+    html_playwright_failures: int
+    html_http_attempts: int
+    html_http_successes: int
+    html_http_failures: int
+    html_http_fallback_successes: int
+    html_http_fallback_failures: int
+    sitemap_http_attempts: int
+    sitemap_http_successes: int
+    sitemap_http_failures: int
+
+
 class LinkingAnalyzeResponse(BaseModel):
     start_url: str
     target_url: str | None
     fetch_summary: str
+    fetch_stats: FetchStats
     found: bool
     matched_by: list[str]
     steps_to_target: int | None
@@ -150,6 +166,20 @@ class LinkingAnalyzeResponse(BaseModel):
                     "start_url": "https://example.com/",
                     "target_url": "https://example.com/catalog/target-page",
                     "fetch_summary": "HTML: Playwright; sitemap: HTTP-only.",
+                    "fetch_stats": {
+                        "playwright_session_available": True,
+                        "html_playwright_attempts": 7,
+                        "html_playwright_successes": 6,
+                        "html_playwright_failures": 1,
+                        "html_http_attempts": 1,
+                        "html_http_successes": 1,
+                        "html_http_failures": 0,
+                        "html_http_fallback_successes": 1,
+                        "html_http_fallback_failures": 0,
+                        "sitemap_http_attempts": 1,
+                        "sitemap_http_successes": 1,
+                        "sitemap_http_failures": 0,
+                    },
                     "found": True,
                     "matched_by": ["url"],
                     "steps_to_target": 3,
@@ -202,6 +232,20 @@ class LinkingAnalyzeResponse(BaseModel):
                     "start_url": "https://example.com/",
                     "target_url": "https://example.com/catalog/target-page",
                     "fetch_summary": "HTML: Playwright; sitemap: HTTP-only.",
+                    "fetch_stats": {
+                        "playwright_session_available": True,
+                        "html_playwright_attempts": 7,
+                        "html_playwright_successes": 6,
+                        "html_playwright_failures": 1,
+                        "html_http_attempts": 1,
+                        "html_http_successes": 1,
+                        "html_http_failures": 0,
+                        "html_http_fallback_successes": 1,
+                        "html_http_fallback_failures": 0,
+                        "sitemap_http_attempts": 1,
+                        "sitemap_http_successes": 1,
+                        "sitemap_http_failures": 0,
+                    },
                     "found": True,
                     "matched_by": ["url"],
                     "steps_to_target": 3,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any, AsyncIterator
 
@@ -57,6 +57,23 @@ class FetchedDocument:
     final_url: str
     body: str
     content_type: str
+    body_bytes: bytes | None = None
+
+
+@dataclass(slots=True)
+class FetchTransportStats:
+    playwright_session_available: bool = False
+    html_playwright_attempts: int = 0
+    html_playwright_successes: int = 0
+    html_playwright_failures: int = 0
+    html_http_attempts: int = 0
+    html_http_successes: int = 0
+    html_http_failures: int = 0
+    html_http_fallback_successes: int = 0
+    html_http_fallback_failures: int = 0
+    sitemap_http_attempts: int = 0
+    sitemap_http_successes: int = 0
+    sitemap_http_failures: int = 0
 
 
 @dataclass(slots=True)
@@ -67,6 +84,11 @@ class FetchSession:
     browser_context: BrowserContext | None = None
     html_fetch_mode: str = "not-requested"
     sitemap_fetch_mode: str = "not-requested"
+    fetch_stats: FetchTransportStats = field(default_factory=FetchTransportStats)
+
+    def __post_init__(self) -> None:
+        if self.browser_context is not None:
+            self.fetch_stats.playwright_session_available = True
 
     def record_fetch_mode(self, *, render_html: bool, mode: str) -> None:
         if render_html:
@@ -146,10 +168,13 @@ class AsyncFetcher:
             return None
 
         deadline = perf_counter() + total_timeout_seconds if total_timeout_seconds is not None else None
+        playwright_attempted = False
         if render_html and session.browser_context is not None:
             session.record_fetch_mode(render_html=True, mode="playwright")
+            session.fetch_stats.html_playwright_attempts += 1
+            playwright_attempted = True
             try:
-                return await self._retry_fetch(
+                document = await self._retry_fetch(
                     lambda timeout_seconds: self._fetch_with_browser(
                         session.browser_context,
                         url,
@@ -158,11 +183,22 @@ class AsyncFetcher:
                     deadline=deadline,
                 )
             except (BrowserHTTPStatusError, PlaywrightError, PlaywrightTimeoutError) as exc:
+                session.fetch_stats.html_playwright_failures += 1
                 logger.debug("Browser fetch failed for %s after retries, falling back to HTTP: %s", url, exc)
+            else:
+                if document is not None:
+                    session.fetch_stats.html_playwright_successes += 1
+                    return document
+                session.fetch_stats.html_playwright_failures += 1
+                return None
 
         session.record_fetch_mode(render_html=render_html, mode="http-only")
+        if render_html:
+            session.fetch_stats.html_http_attempts += 1
+        else:
+            session.fetch_stats.sitemap_http_attempts += 1
         try:
-            return await self._retry_fetch(
+            document = await self._retry_fetch(
                 lambda timeout_seconds: self._fetch_with_http(
                     session.http_client,
                     url,
@@ -171,8 +207,29 @@ class AsyncFetcher:
                 deadline=deadline,
             )
         except (httpx.TimeoutException, httpx.RequestError, httpx.HTTPStatusError) as exc:
+            if render_html:
+                session.fetch_stats.html_http_failures += 1
+                if playwright_attempted:
+                    session.fetch_stats.html_http_fallback_failures += 1
+            else:
+                session.fetch_stats.sitemap_http_failures += 1
             logger.debug("HTTP fetch failed for %s after retries: %s", url, exc)
             return None
+        if document is None:
+            if render_html:
+                session.fetch_stats.html_http_failures += 1
+                if playwright_attempted:
+                    session.fetch_stats.html_http_fallback_failures += 1
+            else:
+                session.fetch_stats.sitemap_http_failures += 1
+            return None
+        if render_html:
+            session.fetch_stats.html_http_successes += 1
+            if playwright_attempted:
+                session.fetch_stats.html_http_fallback_successes += 1
+        else:
+            session.fetch_stats.sitemap_http_successes += 1
+        return document
 
     async def _retry_fetch(
         self,
@@ -257,6 +314,7 @@ class AsyncFetcher:
             final_url=str(response.url),
             body=response.text,
             content_type=response.headers.get("content-type", ""),
+            body_bytes=response.content,
         )
 
     async def _fetch_with_browser(
@@ -278,11 +336,13 @@ class AsyncFetcher:
                 raise BrowserHTTPStatusError(response.status, response.url)
             remaining_timeout_seconds = max(timeout_seconds - (perf_counter() - started_at), 0.0)
             await self._settle_page(page, timeout_seconds=remaining_timeout_seconds)
+            body = await page.content()
             return FetchedDocument(
                 requested_url=url,
                 final_url=page.url,
-                body=await page.content(),
+                body=body,
                 content_type=response.headers.get("content-type", ""),
+                body_bytes=body.encode("utf-8"),
             )
         finally:
             await page.close()

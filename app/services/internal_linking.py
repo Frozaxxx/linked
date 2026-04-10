@@ -419,7 +419,8 @@ class InternalLinkingAnalyzer(
                 if document is None:
                     logger.info("Sitemap fetch returned no document: %s", sitemap_url)
                     continue
-                parsed = parse_sitemap(document.body, self._allowed_host)
+                sitemap_payload = document.body_bytes if document.body_bytes is not None else document.body
+                parsed = parse_sitemap(sitemap_payload, self._allowed_host)
                 allowed_page_urls = {url for url in parsed.page_urls if self._is_allowed_by_robots(url)}
                 sitemap.page_urls.update(allowed_page_urls)
                 if self._target.url and any(self._target.url_matches(url) for url in allowed_page_urls):
