@@ -25,62 +25,22 @@ from app.services.matcher import (
 
 
 class LinkPlacementTextMixin:
-    def _build_relevance_reason(self, snapshot: CrawledPageSnapshot) -> str:
-        title_overlap = list(snapshot.title_terms & self._target_terms)
-        h1_overlap = list(snapshot.h1_terms & self._target_terms)
-        url_overlap = list(snapshot.url_terms & self._target_terms)
-        body_overlap = list(snapshot.body_terms & self._target_terms)
-        if self._normalized_target_title and self._normalized_target_title in snapshot.normalized_title:
-            return "В title страницы уже есть точное или почти точное совпадение с темой целевой страницы."
-        if self._normalized_target_title and self._normalized_target_title in snapshot.normalized_h1:
-            return "В H1 страницы есть точное или почти точное совпадение с темой целевой страницы."
-        if title_overlap:
-            return f"Тема страницы хорошо совпадает с целью по заголовку: {', '.join(sorted(title_overlap)[:3])}."
-        if h1_overlap:
-            return f"Тема страницы хорошо совпадает с целью по H1: {', '.join(sorted(h1_overlap)[:3])}."
-        if url_overlap:
-            return (
-                "URL страницы совпадает с тематикой целевой страницы по ключевым сегментам: "
-                f"{', '.join(sorted(url_overlap)[:3])}."
-            )
-        if body_overlap:
-            return f"В основном тексте страницы встречаются релевантные термины: {', '.join(sorted(body_overlap)[:3])}."
-        if snapshot.depth is None:
-            return "Страница тематически близка к цели по URL и содержанию, поэтому подходит как источник ссылки."
-        if snapshot.depth == 0:
-            return "Страница близка к пользователю по структуре сайта и может передавать вес на целевую страницу."
-        return (
-            f"Страница расположена на глубине {snapshot.depth} и может сократить путь до целевой страницы "
-            "без добавления лишних переходов."
-        )
-
-    def _build_url_only_reason(self, url: str) -> str:
-        url_overlap = list(set(extract_url_terms(url)) & self._target_terms)
-        if url_overlap:
-            return (
-                "URL этой страницы семантически ближе всего к целевой теме по ключевым словам: "
-                f"{', '.join(sorted(url_overlap)[:4])}."
-            )
-        if self._shared_path_bonus(url) > 0:
-            return "URL страницы расположен в близком разделе сайта и подходит как источник прямой ссылки."
-        return "Это реальная страница из sitemap, которая ближе других совпадает с темой целевой страницы по URL."
-
     def _build_soft_relevance_reason(self, snapshot: CrawledPageSnapshot) -> str:
         metadata_terms = snapshot.url_terms | snapshot.title_terms | snapshot.h1_terms
         overlap = list(self._overlapping_target_terms(metadata_terms | snapshot.body_terms))
         if overlap:
-            return f"Ослабленное семантическое совпадение на проверенной странице: {', '.join(sorted(overlap)[:4])}."
+            return f"Совпадение на проверенной странице по терминам: {', '.join(sorted(overlap)[:4])}."
         if self._shared_path_bonus(snapshot.url) > 0:
-            return "Проверенная страница из соседнего раздела сайта, которую можно использовать как резервного донора."
-        return "Проверенная страница, которую можно использовать как резервного донора после ослабления фильтра."
+            return "Проверенная страница из соседнего раздела сайта, которую можно использовать как рабочего донора."
+        return "Проверенная страница, которую можно использовать как рабочего донора по мягкой семантической оценке."
 
     def _build_soft_url_only_reason(self, url: str) -> str:
         url_overlap = list(set(extract_url_terms(url)) & self._target_terms)
         if url_overlap:
-            return f"Ослабленное совпадение по проверенному URL: {', '.join(sorted(url_overlap)[:4])}."
+            return f"Совпадение по проверенному URL: {', '.join(sorted(url_overlap)[:4])}."
         if self._shared_path_bonus(url) > 0:
-            return "Проверенный URL из соседнего раздела сайта, который можно использовать как резервного донора."
-        return "Проверенный URL, который можно использовать как резервного донора после ослабления фильтра."
+            return "Проверенный URL из соседнего раздела сайта, который можно использовать как рабочего донора."
+        return "Проверенный URL, который можно использовать как рабочего донора по мягкой семантической оценке."
 
     def _anchor_hint(self) -> str | None:
         variants = self._anchor_variants()

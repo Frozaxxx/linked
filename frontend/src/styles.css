@@ -1,0 +1,229 @@
+:root {
+  color-scheme: dark;
+  --font-sans: "Mulish", "Roboto", system-ui, sans-serif;
+  --color-dark-900: #0a0a0a;
+  --color-dark-800: #0f0f0f;
+  --color-dark-700: #171717;
+  --color-dark-600: #1f1f1f;
+  --color-dark-500: #262626;
+  --color-accent: #ef4444;
+  --color-accent-hover: #dc2626;
+  --text: #e5e5e5;
+  --muted: #a3a3a3;
+  --danger: #f87171;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  font-family: var(--font-sans);
+  background: var(--color-dark-900);
+  color: var(--text);
+  scroll-behavior: smooth;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top left, rgba(239, 68, 68, 0.16), transparent 28%),
+    radial-gradient(circle at bottom right, rgba(249, 115, 22, 0.1), transparent 26%),
+    var(--color-dark-900);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+button,
+textarea {
+  font: inherit;
+}
+
+textarea:focus,
+button:focus {
+  outline: none;
+}
+
+::selection {
+  background: rgba(239, 68, 68, 0.3);
+  color: white;
+}
+
+.app-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: start center;
+  padding: 24px;
+}
+
+.panel {
+  width: min(860px, 100%);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 16px;
+  background: linear-gradient(
+    145deg,
+    rgba(255, 255, 255, 0.03) 0%,
+    rgba(255, 255, 255, 0.01) 100%
+  );
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  padding: 24px;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.brand-logo {
+  width: 54px;
+  height: 54px;
+  object-fit: contain;
+}
+
+.brand-name {
+  color: #f5f5f5;
+  font-size: 20px;
+  font-weight: 800;
+}
+
+.analysis-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 28px;
+}
+
+.analysis-form label {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.analysis-form textarea {
+  width: 100%;
+  min-height: 136px;
+  resize: vertical;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  padding: 12px 14px;
+  background: rgba(23, 23, 23, 0.86);
+  color: var(--text);
+  line-height: 1.55;
+  transition: all 0.2s ease;
+}
+
+.analysis-form textarea::placeholder {
+  color: #737373;
+}
+
+.analysis-form textarea:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.1);
+}
+
+.analysis-form button {
+  width: fit-content;
+  min-width: 180px;
+  min-height: 48px;
+  border: 0;
+  border-radius: 12px;
+  padding: 0.75rem 1.5rem;
+  background: linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-hover) 100%);
+  color: white;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.25);
+  transition: all 0.2s ease;
+}
+
+.analysis-form button:hover:not(:disabled) {
+  box-shadow: 0 6px 20px rgba(239, 68, 68, 0.35);
+  transform: translateY(-1px);
+}
+
+.analysis-form button:active {
+  transform: translateY(0);
+}
+
+.analysis-form button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+  transform: none;
+}
+
+.result {
+  margin-top: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 16px;
+  background: rgba(15, 15, 15, 0.82);
+  padding: 16px;
+}
+
+.result h1 {
+  margin: 0 0 12px;
+  color: #f5f5f5;
+  font-size: 24px;
+  line-height: 1.15;
+}
+
+.result p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.error-text {
+  color: var(--danger) !important;
+  font-weight: 700;
+}
+
+@media (max-width: 640px) {
+  html {
+    font-size: 15px;
+  }
+
+  .app-shell {
+    padding: 16px;
+  }
+
+  .panel {
+    padding: 18px;
+  }
+
+  .analysis-form button {
+    width: 100%;
+  }
+}

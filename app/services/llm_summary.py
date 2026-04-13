@@ -9,17 +9,14 @@ from app.schemas import OptimizationStatus
 from app.services.gigachat_client import create_gigachat_client
 from app.services.link_placement import PlacementRecommendation
 from app.services.llm_summary_templates import (
-    append_recommendation_sentence,
     append_soft_candidates_message,
     build_fallback_message,
-    build_single_candidate_message,
     build_soft_candidates_message,
     build_static_message,
     finalize_message,
     has_site_access_issue,
     normalize_message,
     problem_intro,
-    recommendation_sentence,
     should_render_multiple_candidates,
     soft_candidate_label,
     soft_candidates_sentence,
@@ -131,20 +128,12 @@ class LinkingAnalysisMessageGenerator:
             )
 
         if context.placement_recommendations:
-            if should_render_multiple_candidates(context):
-                prompt += (
-                    "\nplacement_recommendations это внутренние подсказки."
-                    " Не перечисляй страницы-кандидаты, не упоминай их заголовки и не выводи URL."
-                    " Система сама добавит несколько проверенных URL."
-                    " Сфокусируйся только на проблеме, влиянии на SEO и причине ослабления семантического фильтра."
-                )
-            else:
-                prompt += (
-                    "\nplacement_recommendations это внутренние подсказки."
-                    " Не перечисляй страницы-кандидаты, не упоминай их заголовки и не выводи URL."
-                    " Не формулируй финальную рекомендацию по странице сам: система добавит лучший URL отдельно."
-                    " Сфокусируйся только на проблеме, влиянии на SEO и общем способе исправления."
-                )
+            prompt += (
+                "\nplacement_recommendations это внутренние подсказки."
+                " Не перечисляй страницы-кандидаты, не упоминай их заголовки и не выводи URL."
+                " Система сама добавит несколько проверенных URL."
+                " Сфокусируйся только на проблеме, влиянии на SEO и причине мягкой семантической оценки."
+            )
         else:
             prompt += (
                 "\nЕсли placement_recommendations пустой, не придумывай страницы и URL."
@@ -189,14 +178,11 @@ class LinkingAnalysisMessageGenerator:
     _build_fallback_message = staticmethod(build_fallback_message)
     _finalize_message = staticmethod(finalize_message)
     _strip_model_recommendation_section = staticmethod(strip_model_recommendation_section)
-    _append_recommendation_sentence = staticmethod(append_recommendation_sentence)
     _problem_intro = staticmethod(problem_intro)
-    _build_single_candidate_message = staticmethod(build_single_candidate_message)
     _should_render_multiple_candidates = staticmethod(should_render_multiple_candidates)
     _build_soft_candidates_message = staticmethod(build_soft_candidates_message)
     _append_soft_candidates_message = staticmethod(append_soft_candidates_message)
     _soft_candidates_sentence = staticmethod(soft_candidates_sentence)
     _soft_candidate_label = staticmethod(soft_candidate_label)
-    _recommendation_sentence = staticmethod(recommendation_sentence)
     _has_site_access_issue = staticmethod(has_site_access_issue)
     _normalize_message = staticmethod(normalize_message)

@@ -20,17 +20,15 @@ RECOMMENDATION_MARKERS = (
 
 
 def build_static_message(context: AnalysisMessageContext) -> str | None:
+    if context.placement_recommendations:
+        return build_soft_candidates_message(context)
+
     if context.optimization_status == "good" and context.steps_to_target is not None:
         return (
             "Перелинковка выглядит хорошей: "
             f"целевая страница находится за {context.steps_to_target} {step_word(context.steps_to_target)} "
             f"при пороге {context.good_depth_threshold}."
         )
-
-    if context.placement_recommendations:
-        if should_render_multiple_candidates(context):
-            return build_soft_candidates_message(context)
-        return build_single_candidate_message(context)
 
     if has_site_access_issue(context):
         return build_access_issue_message(context)
@@ -40,9 +38,7 @@ def build_static_message(context: AnalysisMessageContext) -> str | None:
 
 def build_fallback_message(context: AnalysisMessageContext) -> str:
     if context.placement_recommendations:
-        if should_render_multiple_candidates(context):
-            return build_soft_candidates_message(context)
-        return build_single_candidate_message(context)
+        return build_soft_candidates_message(context)
 
     if has_site_access_issue(context):
         return build_access_issue_message(context)
@@ -59,14 +55,7 @@ def finalize_message(message: str, context: AnalysisMessageContext) -> str:
     if not context.placement_recommendations:
         return cleaned
 
-    if should_render_multiple_candidates(context):
-        return append_soft_candidates_message(cleaned, context)
-
-    best = context.placement_recommendations[0]
-    if best.source_url in cleaned:
-        return normalize_message(cleaned)
-
-    return append_recommendation_sentence(cleaned, best)
+    return append_soft_candidates_message(cleaned, context)
 
 
 def strip_model_recommendation_section(message: str, context: AnalysisMessageContext) -> str:
@@ -89,23 +78,18 @@ def strip_model_recommendation_section(message: str, context: AnalysisMessageCon
     return normalize_message(cleaned)
 
 
-def append_recommendation_sentence(message: str, recommendation: PlacementRecommendation) -> str:
-    base = normalize_message(message)
-    if base and base[-1] not in ".!?":
-        base += "."
-
-    sentence = recommendation_sentence(recommendation)
-    if not base:
-        return sentence
-    return f"{base} {sentence}"
-
-
 def crawl_is_inconclusive(context: AnalysisMessageContext) -> bool:
     return getattr(context, "budget_exhausted", False) or getattr(context, "level_truncated", False)
 
 
 def problem_intro(context: AnalysisMessageContext) -> str:
     if context.found and context.steps_to_target is not None:
+        if context.steps_to_target <= context.good_depth_threshold:
+            return (
+                "Перелинковка выглядит хорошей: "
+                f"целевая страница находится за {context.steps_to_target} {step_word(context.steps_to_target)} "
+                f"при пороге {context.good_depth_threshold}."
+            )
         return (
             "Перелинковка слабая: "
             f"до целевой страницы {context.steps_to_target} {step_word(context.steps_to_target)}, "
@@ -132,28 +116,8 @@ def problem_intro(context: AnalysisMessageContext) -> str:
     )
 
 
-def build_single_candidate_message(context: AnalysisMessageContext) -> str:
-    recommendation = context.placement_recommendations[0]
-    parts = [
-        problem_intro(context),
-        f"Лучший семантически близкий URL для ссылки: {recommendation.source_url}.",
-        recommendation.placement_hint.rstrip(".") + ".",
-    ]
-    reason = candidate_reason_label(recommendation)
-    if reason:
-        parts.append(f"Почему выбран именно он: {reason}.")
-    if recommendation.projected_steps_to_target is not None:
-        parts.append(
-            f"После добавления ссылки путь до цели сократится до {recommendation.projected_steps_to_target} "
-            f"{step_word_after_preposition(recommendation.projected_steps_to_target)}."
-        )
-    if recommendation.anchor_hint:
-        parts.append(f"В анкере можно использовать: {recommendation.anchor_hint}.")
-    return " ".join(parts)
-
-
 def should_render_multiple_candidates(context: AnalysisMessageContext) -> bool:
-    return bool(context.placement_recommendations) and context.placement_recommendations[0].confidence in {"soft", "fallback"}
+    return bool(context.placement_recommendations)
 
 
 def build_soft_candidates_message(context: AnalysisMessageContext) -> str:
@@ -171,9 +135,6 @@ def append_soft_candidates_message(message: str, context: AnalysisMessageContext
 
 def soft_candidates_sentence(context: AnalysisMessageContext) -> str:
     recommendations = context.placement_recommendations
-    if recommendations and recommendations[0].confidence == "fallback":
-        return fallback_candidates_sentence(context)
-
     top_candidates = recommendations[:3]
     candidate_labels = [
         soft_candidate_label(recommendation, index=index, context=context)
@@ -182,22 +143,8 @@ def soft_candidates_sentence(context: AnalysisMessageContext) -> str:
     labels = "; ".join(candidate_labels)
     placement_hint = top_candidates[0].placement_hint.rstrip(".")
     return (
-        "Сильного семантически точного донора не найдено, поэтому ниже показаны до 3 кандидатов в порядке приоритета: "
+        "Ниже показаны до 3 URL-кандидатов по мягкой семантической оценке в порядке приоритета: "
         f"{labels}. {placement_hint}. Они отсортированы от более релевантного к менее надежному и требуют ручной проверки."
-    )
-
-
-def fallback_candidates_sentence(context: AnalysisMessageContext) -> str:
-    top_candidates = context.placement_recommendations[:3]
-    candidate_labels = [
-        soft_candidate_label(recommendation, index=index, context=context)
-        for index, recommendation in enumerate(top_candidates, start=1)
-    ]
-    labels = "; ".join(candidate_labels)
-    placement_hint = top_candidates[0].placement_hint.rstrip(".")
-    return (
-        "Ниже показаны до 3 резервных URL-кандидатов в порядке приоритета: "
-        f"{labels}. {placement_hint}. Эти варианты нужно проверить вручную на странице, и они не равнозначны: первый кандидат наиболее сильный, следующие слабее."
     )
 
 
@@ -242,36 +189,6 @@ def candidate_reason_label(recommendation: PlacementRecommendation) -> str | Non
     if len(first_token) > 1 and (first_token.isupper() or any(char.isdigit() for char in first_token)):
         return reason
     return reason[0].lower() + reason[1:] if len(reason) > 1 else reason.lower()
-
-
-def recommendation_sentence(recommendation: PlacementRecommendation) -> str:
-    if recommendation.confidence == "soft":
-        intro = (
-            "Если сильный семантический донор не найден, как рабочий кандидат можно использовать URL "
-            f"{recommendation.source_url}."
-        )
-    elif recommendation.confidence == "fallback":
-        intro = (
-            "Если более близкую страницу подтвердить не удалось, как запасной вариант можно использовать URL "
-            f"{recommendation.source_url}."
-        )
-    elif recommendation.confidence == "medium":
-        intro = f"Подходящий URL для прямой ссылки: {recommendation.source_url}."
-    else:
-        intro = f"Лучший URL для прямой ссылки: {recommendation.source_url}."
-
-    parts = [intro, recommendation.placement_hint.rstrip(".") + "."]
-    reason = candidate_reason_label(recommendation)
-    if reason:
-        parts.append(f"Почему выбран именно он: {reason}.")
-    if recommendation.projected_steps_to_target is not None:
-        parts.append(
-            f"После добавления ссылки путь до цели сократится до {recommendation.projected_steps_to_target} "
-            f"{step_word_after_preposition(recommendation.projected_steps_to_target)}."
-        )
-    if recommendation.anchor_hint:
-        parts.append(f"В анкере можно использовать: {recommendation.anchor_hint}.")
-    return " ".join(parts)
 
 
 def has_site_access_issue(context: AnalysisMessageContext) -> bool:

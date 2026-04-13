@@ -11,7 +11,7 @@ def make_recommendation(
     *,
     depth: int,
     projected_steps: int | None,
-    confidence: str = "strong",
+    confidence: str = "soft",
     reason: str = "ключевые слова URL: target, page",
 ) -> PlacementRecommendation:
     return PlacementRecommendation(
@@ -56,7 +56,7 @@ def make_context(**overrides) -> SimpleNamespace:
     return SimpleNamespace(**payload)
 
 
-def test_strong_candidate_message_contains_reason_and_best_url() -> None:
+def test_single_soft_candidate_message_uses_ranked_candidate_list() -> None:
     recommendation = make_recommendation(
         "https://example.com/section/best-donor",
         depth=2,
@@ -73,9 +73,9 @@ def test_strong_candidate_message_contains_reason_and_best_url() -> None:
 
     assert message is not None
     assert message.count(recommendation.source_url) == 1
-    assert "Лучший семантически близкий URL для ссылки" in message
-    assert "Почему выбран именно он" in message
-    assert "После добавления ссылки путь до цели сократится до 3 шагов" in message
+    assert "URL-кандидатов по мягкой семантической оценке" in message
+    assert "1) https://example.com/section/best-donor" in message
+    assert "ключевые слова URL" in message
 
 
 def test_soft_candidates_message_is_ranked_and_contains_reasons() -> None:
@@ -114,27 +114,24 @@ def test_soft_candidates_message_is_ranked_and_contains_reasons() -> None:
     assert "ключевые слова URL" in message
 
 
-def test_fallback_candidates_message_marks_current_crawl_depth_when_truncated() -> None:
+def test_soft_candidates_message_marks_current_crawl_depth_when_truncated() -> None:
     recommendations = [
         make_recommendation(
             "https://example.com/branch",
             depth=1,
             projected_steps=2,
-            confidence="fallback",
             reason="общая структурная ветка: GLRI / Focus Area 5",
         ),
         make_recommendation(
             "https://example.com/branch/section",
             depth=2,
             projected_steps=3,
-            confidence="fallback",
             reason="ключевые слова URL: winter, observations",
         ),
         make_recommendation(
             "https://example.com/branch/section/topic",
             depth=3,
             projected_steps=4,
-            confidence="fallback",
             reason="ключевые слова URL: monitoring, winter",
         ),
     ]
@@ -153,7 +150,7 @@ def test_fallback_candidates_message_marks_current_crawl_depth_when_truncated() 
     assert "Целевая страница есть в sitemap" in message
     assert "Обход был неполным, поэтому это еще не доказывает слабую перелинковку" in message
     assert "глубина в текущем запуске: 1" in message
-    assert "первый кандидат наиболее сильный" in message
+    assert "URL-кандидатов по мягкой семантической оценке" in message
 
 
 def test_candidate_reason_label_keeps_url_acronym_uppercase() -> None:
@@ -161,7 +158,6 @@ def test_candidate_reason_label_keeps_url_acronym_uppercase() -> None:
         "https://example.com/candidate-1",
         depth=1,
         projected_steps=2,
-        confidence="fallback",
         reason="URL этой страницы семантически ближе всего к целевой теме по ключевым словам: mobile, observation",
     )
     context = make_context(

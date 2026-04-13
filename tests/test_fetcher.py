@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
 
-from app.services.fetcher import AsyncFetcher, FetchSession, FetchedDocument, PlaywrightError
+from app.services.fetcher import AsyncFetcher, BrowserHTTPStatusError, FetchSession, FetchedDocument, PlaywrightError
 
 
 @pytest.fixture
@@ -168,10 +169,32 @@ async def test_fetch_falls_back_to_http_when_playwright_request_fails(browser_se
     assert browser_session.fetch_stats.html_playwright_attempts == 1
     assert browser_session.fetch_stats.html_playwright_successes == 0
     assert browser_session.fetch_stats.html_playwright_failures == 1
+    assert browser_session.fetch_stats.html_playwright_other_failures == 1
     assert browser_session.fetch_stats.html_http_attempts == 1
     assert browser_session.fetch_stats.html_http_successes == 1
     assert browser_session.fetch_stats.html_http_fallback_successes == 1
     assert browser_session.fetch_stats.html_http_fallback_failures == 0
+
+
+@pytest.mark.asyncio
+async def test_fetch_records_playwright_status_failures(browser_session: FetchSession) -> None:
+    fetcher = AsyncFetcher(timeout_seconds=1, retry_count=0)
+    fetcher._fetch_with_browser = AsyncMock(side_effect=BrowserHTTPStatusError(429, "https://example.com/"))
+    fetcher._fetch_with_http = AsyncMock(return_value=None)
+    recorded_statuses: list[tuple[int, str]] = []
+
+    document = await fetcher.fetch(
+        browser_session,
+        "https://example.com/",
+        total_timeout_seconds=0.5,
+        failure_status_callback=lambda status, url: recorded_statuses.append((status, url)),
+    )
+
+    assert document is None
+    assert browser_session.fetch_stats.html_playwright_failures == 1
+    assert browser_session.fetch_stats.html_playwright_http_status_failures == 1
+    assert browser_session.fetch_stats.html_playwright_failure_status_codes == {"429": 1}
+    assert recorded_statuses == [(429, "https://example.com/")]
 
 
 @pytest.mark.asyncio
@@ -183,3 +206,22 @@ async def test_create_client_falls_back_to_http_when_browser_session_does_not_st
         assert session.browser_context is None
         assert session.html_fetch_mode == "not-requested"
         assert session.fetch_stats.playwright_session_available is False
+
+
+@pytest.mark.asyncio
+async def test_create_browser_session_sets_context_fingerprint(http_session: FetchSession) -> None:
+    fetcher = AsyncFetcher(timeout_seconds=1, retry_count=0)
+    browser_context = AsyncMock()
+    browser = AsyncMock()
+    browser.new_context = AsyncMock(return_value=browser_context)
+    browser_factory = MagicMock()
+    browser_factory.launch = AsyncMock(return_value=browser)
+    playwright = AsyncMock()
+    playwright.chromium = browser_factory
+
+    session = await fetcher._create_browser_session(http_session.http_client, playwright=playwright)
+
+    assert session.browser_context is browser_context
+    _, kwargs = browser.new_context.await_args
+    assert kwargs["viewport"] == {"width": 1366, "height": 768}
+    assert kwargs["timezone_id"] == "America/New_York"

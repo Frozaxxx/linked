@@ -7,12 +7,10 @@ from pydantic import AnyHttpUrl, BaseModel, Field
 from app.settings import get_settings
 
 try:
-    from pydantic import model_validator
+    from pydantic import ConfigDict
 
     PYDANTIC_V2 = True
 except ImportError:  # pragma: no cover
-    from pydantic import root_validator
-
     PYDANTIC_V2 = False
 
 
@@ -26,79 +24,29 @@ class OptimizationStatus(str, Enum):
 
 
 class LinkingAnalyzeRequest(BaseModel):
-    start_url: AnyHttpUrl = Field(
+    target_url: AnyHttpUrl = Field(
         ...,
-        description="Страница сайта, с которой начинается обход.",
-    )
-    target_url: AnyHttpUrl | None = Field(
-        default=None,
-        description="URL целевой страницы. Лучший вариант, если нужно точно измерить глубину до известной страницы.",
-    )
-    target_title: str | None = Field(
-        default=None,
-        min_length=1,
-        description="Необязательный поиск страницы по заголовку.",
-    )
-    target_text: str | None = Field(
-        default=None,
-        min_length=1,
-        description="Необязательный поиск страницы по тексту.",
-    )
-    timeout_seconds: float = Field(
-        default=settings.request_timeout_seconds,
-        gt=0,
-        le=60,
-        description="Таймаут одного HTTP-запроса.",
-    )
-    retry_count: int = Field(
-        default=settings.request_retry_count,
-        ge=0,
-        le=5,
-        description="Количество повторов при временных сетевых ошибках.",
+        description="URL целевой страницы. По нему анализатор находит главную страницу сайта и запускает обход.",
     )
 
     if PYDANTIC_V2:
-        model_config = {
-            "json_schema_extra": {
+        model_config = ConfigDict(
+            extra="forbid",
+            json_schema_extra={
                 "example": {
-                    "start_url": "https://example.com/",
                     "target_url": "https://example.com/catalog/target-page",
-                    "target_title": None,
-                    "target_text": None,
-                    "timeout_seconds": settings.request_timeout_seconds,
-                    "retry_count": settings.request_retry_count,
                 }
-            }
-        }
+            },
+        )
     else:  # pragma: no cover
 
         class Config:
+            extra = "forbid"
             schema_extra = {
                 "example": {
-                    "start_url": "https://example.com/",
                     "target_url": "https://example.com/catalog/target-page",
-                    "target_title": None,
-                    "target_text": None,
-                    "timeout_seconds": settings.request_timeout_seconds,
-                    "retry_count": settings.request_retry_count,
                 }
             }
-
-    if PYDANTIC_V2:
-
-        @model_validator(mode="after")
-        def validate_target(self) -> "LinkingAnalyzeRequest":
-            if not any((self.target_url, self.target_title, self.target_text)):
-                raise ValueError("Нужно указать хотя бы один критерий поиска: target_url, target_title или target_text.")
-            return self
-
-    else:  # pragma: no cover
-
-        @root_validator
-        def validate_target(cls, values: dict) -> dict:
-            if not any((values.get("target_url"), values.get("target_title"), values.get("target_text"))):
-                raise ValueError("Нужно указать хотя бы один критерий поиска: target_url, target_title или target_text.")
-            return values
 
 
 class AnalyzeTimings(BaseModel):
@@ -122,6 +70,11 @@ class FetchStats(BaseModel):
     html_playwright_attempts: int
     html_playwright_successes: int
     html_playwright_failures: int
+    html_playwright_timeout_failures: int
+    html_playwright_http_status_failures: int
+    html_playwright_no_response_failures: int
+    html_playwright_other_failures: int
+    html_playwright_failure_status_codes: dict[str, int]
     html_http_attempts: int
     html_http_successes: int
     html_http_failures: int
@@ -171,6 +124,11 @@ class LinkingAnalyzeResponse(BaseModel):
                         "html_playwright_attempts": 7,
                         "html_playwright_successes": 6,
                         "html_playwright_failures": 1,
+                        "html_playwright_timeout_failures": 0,
+                        "html_playwright_http_status_failures": 1,
+                        "html_playwright_no_response_failures": 0,
+                        "html_playwright_other_failures": 0,
+                        "html_playwright_failure_status_codes": {"503": 1},
                         "html_http_attempts": 1,
                         "html_http_successes": 1,
                         "html_http_failures": 0,
@@ -237,6 +195,11 @@ class LinkingAnalyzeResponse(BaseModel):
                         "html_playwright_attempts": 7,
                         "html_playwright_successes": 6,
                         "html_playwright_failures": 1,
+                        "html_playwright_timeout_failures": 0,
+                        "html_playwright_http_status_failures": 1,
+                        "html_playwright_no_response_failures": 0,
+                        "html_playwright_other_failures": 0,
+                        "html_playwright_failure_status_codes": {"503": 1},
                         "html_http_attempts": 1,
                         "html_http_successes": 1,
                         "html_http_failures": 0,

@@ -24,13 +24,17 @@ class Settings(BaseSettings):
     )
     analyze_summary: str = "Проверить внутреннюю перелинковку до целевой страницы"
 
-    request_timeout_seconds: float = 10.0
+    request_timeout_seconds: float = 20.0
     request_retry_count: int = 1
-    crawl_concurrency: int = 12
+    crawl_concurrency: int = 4
     good_depth_threshold: int = 4
     crawl_max_depth: int = 4
-    analyze_time_budget_seconds: float = 120.0
-    max_crawl_level_size: int = 300
+    analyze_time_budget_seconds: float = 150.0
+    max_crawl_level_size: int = 400
+    sitemap_time_budget_seconds: float = 12.0
+    sitemap_max_files: int = 32
+    sitemap_max_page_urls: int = 20_000
+    html_403_branch_skip_threshold: int = 1
     obey_robots_txt: bool = True
     robots_user_agent: str = "*"
     log_level: str = "INFO"
@@ -78,6 +82,9 @@ class Settings(BaseSettings):
     fetch_accept_header: str = "text/html,application/xhtml+xml,application/xml,text/xml;q=0.9,*/*;q=0.8"
     fetch_browser_name: str = "chromium"
     fetch_browser_headless: bool = True
+    fetch_browser_viewport_width: int = 1366
+    fetch_browser_viewport_height: int = 768
+    fetch_browser_timezone_id: str = "America/New_York"
     fetch_browser_network_idle_timeout_ms: int = 1500
     fetch_browser_post_load_wait_ms: int = 250
 

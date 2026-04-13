@@ -9,12 +9,6 @@ MAX_RECOMMENDATIONS = 3
 MAX_TERMS_PER_FIELD = 48
 MIN_RECOMMENDATION_SOURCE_DEPTH = 1
 MAX_RECOMMENDATION_SOURCE_DEPTH = 3
-MIN_RECOMMENDATION_CONTEXT_SCORE = 8
-MIN_PATH_CONTEXT_SCORE = 8
-MIN_BRANCH_CONTEXT_SCORE = 8
-MIN_CORE_BRANCH_SCORE = 5
-MIN_STRONG_TOPIC_SCORE = 18
-MIN_STRONG_SIGNATURE_COUNT = 3
 
 TECHNICAL_URL_TOKENS = {
     "404",
@@ -127,7 +121,7 @@ class PlacementRecommendation:
     reason: str
     placement_hint: str
     anchor_hint: str | None
-    confidence: str = "strong"
+    confidence: str = "soft"
 
 
 @dataclass(slots=True)

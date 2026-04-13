@@ -9,6 +9,7 @@ from app.schemas import CrawlDiagnostics, FetchStats, LinkingAnalyzeResponse
 from app.services.fetcher import FetchSession
 from app.services.internal_linking_models import SITEMAP_RECOMMENDATION_RANK_LIMIT
 from app.services.link_placement import CrawledPageSnapshot
+from app.services.link_placement_models import MAX_RECOMMENDATIONS
 from app.services.llm_summary import AnalysisMessageContext
 from app.services.parser import is_internal_url, normalize_url, parse_html
 from app.settings import get_settings
@@ -40,39 +41,42 @@ class InternalLinkingResponseMixin:
     ) -> LinkingAnalyzeResponse:
         status = self._resolve_optimization_status(found=found, steps_to_target=steps_to_target)
         verified_candidate_depths: dict[str, int] = {}
-        placement_recommendations = self._sanitize_placement_recommendations(
-            self._placement_recommender.build_recommendations(
-                found=found,
-                steps_to_target=steps_to_target,
-                path=path,
+        placement_recommendations = self._extend_placement_recommendations(
+            [],
+            self._placement_recommender.build_soft_verified_recommendations(
                 crawled_pages=crawled_pages,
-            )
+                excluded_urls=set(path),
+            ),
         )
 
-        if not placement_recommendations and discovered_depths:
-            placement_recommendations = self._build_depth_based_recommendations(
-                candidate_depths=discovered_depths,
-                path=path,
-                soft=False,
+        if self._needs_more_placement_recommendations(placement_recommendations) and discovered_depths:
+            placement_recommendations = self._extend_placement_recommendations(
+                placement_recommendations,
+                self._build_depth_based_recommendations(
+                    candidate_depths=discovered_depths,
+                    path=path,
+                ),
             )
 
-        if not placement_recommendations and sitemap_page_urls:
-            placement_recommendations = self._sanitize_placement_recommendations(
+        if self._needs_more_placement_recommendations(placement_recommendations) and sitemap_page_urls:
+            placement_recommendations = self._extend_placement_recommendations(
+                placement_recommendations,
                 self._placement_recommender.build_structural_recommendations(
                     sitemap_page_urls=sitemap_page_urls,
                     excluded_urls=set(path),
-                )
+                ),
             )
 
-        if not placement_recommendations and self._target.url:
-            placement_recommendations = self._sanitize_placement_recommendations(
+        if self._needs_more_placement_recommendations(placement_recommendations) and self._target.url:
+            placement_recommendations = self._extend_placement_recommendations(
+                placement_recommendations,
                 self._placement_recommender.build_structural_recommendations(
                     sitemap_page_urls=set(self._candidate_parent_urls()),
                     excluded_urls=set(path),
-                )
+                ),
             )
 
-        if not placement_recommendations and sitemap_page_urls:
+        if self._needs_more_placement_recommendations(placement_recommendations) and sitemap_page_urls:
             sitemap_candidate_urls = self._rank_sitemap_candidate_urls(
                 sitemap_page_urls=sitemap_page_urls,
                 crawled_pages=crawled_pages,
@@ -88,16 +92,15 @@ class InternalLinkingResponseMixin:
                 candidate_depths=sitemap_verified_depths,
                 crawled_pages=crawled_pages,
             )
-            placement_recommendations = self._sanitize_placement_recommendations(
-                self._placement_recommender.build_recommendations(
-                    found=found,
-                    steps_to_target=steps_to_target,
-                    path=path,
+            placement_recommendations = self._extend_placement_recommendations(
+                placement_recommendations,
+                self._placement_recommender.build_soft_verified_recommendations(
                     crawled_pages=crawled_pages,
-                )
+                    excluded_urls=set(path),
+                ),
             )
 
-        if not placement_recommendations and self._target.url:
+        if self._needs_more_placement_recommendations(placement_recommendations) and self._target.url:
             parent_verified_depths = await self._verify_candidate_depths(
                 client=client,
                 candidate_urls=self._candidate_parent_urls(),
@@ -109,72 +112,23 @@ class InternalLinkingResponseMixin:
                 candidate_depths=parent_verified_depths,
                 crawled_pages=crawled_pages,
             )
-            placement_recommendations = self._sanitize_placement_recommendations(
-                self._placement_recommender.build_recommendations(
-                    found=found,
-                    steps_to_target=steps_to_target,
-                    path=path,
-                    crawled_pages=crawled_pages,
-                )
-            )
-
-        if not placement_recommendations and verified_candidate_depths:
-            excluded_urls = set(path)
-            placement_recommendations = self._sanitize_placement_recommendations(
-                self._placement_recommender.build_url_only_recommendations(
-                    sitemap_page_urls=set(verified_candidate_depths),
-                    excluded_urls=excluded_urls,
-                    verified_depths=verified_candidate_depths,
-                )
-            )
-
-        if not placement_recommendations:
-            placement_recommendations = self._sanitize_placement_recommendations(
+            placement_recommendations = self._extend_placement_recommendations(
+                placement_recommendations,
                 self._placement_recommender.build_soft_verified_recommendations(
                     crawled_pages=crawled_pages,
                     excluded_urls=set(path),
-                )
+                ),
             )
 
-        if not placement_recommendations and discovered_depths:
-            placement_recommendations = self._build_depth_based_recommendations(
-                candidate_depths=discovered_depths,
-                path=path,
-                soft=True,
-            )
-
-        if not placement_recommendations and sitemap_page_urls:
-            relaxed_sitemap_candidate_urls = self._rank_sitemap_candidate_urls(
-                sitemap_page_urls=sitemap_page_urls,
-                crawled_pages=crawled_pages,
-                relaxed=True,
-            )
-            relaxed_sitemap_verified_depths = await self._verify_candidate_depths(
-                client=client,
-                candidate_urls=relaxed_sitemap_candidate_urls,
-                crawled_pages=crawled_pages,
-            )
-            self._merge_verified_depths(verified_candidate_depths, relaxed_sitemap_verified_depths)
-            pages_fetched += await self._populate_verified_candidate_snapshots(
-                client=client,
-                candidate_depths=relaxed_sitemap_verified_depths,
-                crawled_pages=crawled_pages,
-            )
-            placement_recommendations = self._sanitize_placement_recommendations(
-                self._placement_recommender.build_soft_verified_recommendations(
-                    crawled_pages=crawled_pages,
-                    excluded_urls=set(path),
-                )
-            )
-
-        if not placement_recommendations and verified_candidate_depths:
+        if self._needs_more_placement_recommendations(placement_recommendations) and verified_candidate_depths:
             excluded_urls = set(path)
-            placement_recommendations = self._sanitize_placement_recommendations(
+            placement_recommendations = self._extend_placement_recommendations(
+                placement_recommendations,
                 self._placement_recommender.build_soft_url_only_recommendations(
                     sitemap_page_urls=set(verified_candidate_depths),
                     excluded_urls=excluded_urls,
                     verified_depths=verified_candidate_depths,
-                )
+                ),
             )
 
         placement_recommendations = await self._placement_reranker.rerank(
@@ -238,12 +192,17 @@ class InternalLinkingResponseMixin:
             found_in_sitemap,
         )
         logger.info(
-            "Fetch stats: start_url=%s playwright_available=%s html_playwright_attempts=%s html_playwright_successes=%s html_playwright_failures=%s html_http_attempts=%s html_http_successes=%s html_http_failures=%s html_http_fallback_successes=%s html_http_fallback_failures=%s sitemap_http_attempts=%s sitemap_http_successes=%s sitemap_http_failures=%s",
+            "Fetch stats: start_url=%s playwright_available=%s html_playwright_attempts=%s html_playwright_successes=%s html_playwright_failures=%s html_playwright_timeout_failures=%s html_playwright_http_status_failures=%s html_playwright_no_response_failures=%s html_playwright_other_failures=%s html_playwright_failure_status_codes=%s html_http_attempts=%s html_http_successes=%s html_http_failures=%s html_http_fallback_successes=%s html_http_fallback_failures=%s sitemap_http_attempts=%s sitemap_http_successes=%s sitemap_http_failures=%s",
             self._start_url,
             client.fetch_stats.playwright_session_available,
             client.fetch_stats.html_playwright_attempts,
             client.fetch_stats.html_playwright_successes,
             client.fetch_stats.html_playwright_failures,
+            client.fetch_stats.html_playwright_timeout_failures,
+            client.fetch_stats.html_playwright_http_status_failures,
+            client.fetch_stats.html_playwright_no_response_failures,
+            client.fetch_stats.html_playwright_other_failures,
+            client.fetch_stats.html_playwright_failure_status_codes,
             client.fetch_stats.html_http_attempts,
             client.fetch_stats.html_http_successes,
             client.fetch_stats.html_http_failures,
@@ -272,6 +231,11 @@ class InternalLinkingResponseMixin:
                 html_playwright_attempts=client.fetch_stats.html_playwright_attempts,
                 html_playwright_successes=client.fetch_stats.html_playwright_successes,
                 html_playwright_failures=client.fetch_stats.html_playwright_failures,
+                html_playwright_timeout_failures=client.fetch_stats.html_playwright_timeout_failures,
+                html_playwright_http_status_failures=client.fetch_stats.html_playwright_http_status_failures,
+                html_playwright_no_response_failures=client.fetch_stats.html_playwright_no_response_failures,
+                html_playwright_other_failures=client.fetch_stats.html_playwright_other_failures,
+                html_playwright_failure_status_codes=dict(client.fetch_stats.html_playwright_failure_status_codes),
                 html_http_attempts=client.fetch_stats.html_http_attempts,
                 html_http_successes=client.fetch_stats.html_http_successes,
                 html_http_failures=client.fetch_stats.html_http_failures,
@@ -386,28 +350,29 @@ class InternalLinkingResponseMixin:
             sanitized.append(recommendation)
         return sanitized
 
+    def _extend_placement_recommendations(self, current: list, candidates: list) -> list:
+        if not candidates:
+            return current
+        return self._sanitize_placement_recommendations([*current, *candidates])[:MAX_RECOMMENDATIONS]
+
+    @staticmethod
+    def _needs_more_placement_recommendations(recommendations: list) -> bool:
+        return len(recommendations) < MAX_RECOMMENDATIONS
+
     def _build_depth_based_recommendations(
         self,
         *,
         candidate_depths: dict[str, int],
         path: list[str],
-        soft: bool,
     ) -> list:
         if not candidate_depths:
             return []
         excluded_urls = set(path)
-        if soft:
-            recommendations = self._placement_recommender.build_soft_url_only_recommendations(
-                sitemap_page_urls=set(candidate_depths),
-                excluded_urls=excluded_urls,
-                verified_depths=candidate_depths,
-            )
-        else:
-            recommendations = self._placement_recommender.build_url_only_recommendations(
-                sitemap_page_urls=set(candidate_depths),
-                excluded_urls=excluded_urls,
-                verified_depths=candidate_depths,
-            )
+        recommendations = self._placement_recommender.build_soft_url_only_recommendations(
+            sitemap_page_urls=set(candidate_depths),
+            excluded_urls=excluded_urls,
+            verified_depths=candidate_depths,
+        )
         return self._sanitize_placement_recommendations(recommendations)
 
     def _candidate_parent_urls(self) -> list[str]:
@@ -435,13 +400,12 @@ class InternalLinkingResponseMixin:
         *,
         sitemap_page_urls: set[str],
         crawled_pages: dict[str, CrawledPageSnapshot],
-        relaxed: bool = False,
     ) -> list[str]:
         ranked: list[tuple[int, str]] = []
         for url in sitemap_page_urls:
             if url in crawled_pages or self._target.url_matches(url):
                 continue
-            score = self._placement_recommender.score_source_url_soft(url) if relaxed else self._placement_recommender.score_source_url(url)
+            score = self._placement_recommender.score_source_url_soft(url)
             if score <= 0:
                 continue
             ranked.append((score, url))

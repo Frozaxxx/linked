@@ -4,7 +4,7 @@ import logging
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from time import perf_counter
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Callable
 
 import httpx
 from tenacity import AsyncRetrying, retry_if_exception, stop_after_attempt, wait_exponential
@@ -66,6 +66,11 @@ class FetchTransportStats:
     html_playwright_attempts: int = 0
     html_playwright_successes: int = 0
     html_playwright_failures: int = 0
+    html_playwright_timeout_failures: int = 0
+    html_playwright_http_status_failures: int = 0
+    html_playwright_no_response_failures: int = 0
+    html_playwright_other_failures: int = 0
+    html_playwright_failure_status_codes: dict[str, int] = field(default_factory=dict)
     html_http_attempts: int = 0
     html_http_successes: int = 0
     html_http_failures: int = 0
@@ -127,6 +132,12 @@ class BrowserHTTPStatusError(Exception):
         super().__init__(f"Browser fetch failed with status {status_code} for {url}")
 
 
+class BrowserNoDocumentResponseError(PlaywrightError):
+    def __init__(self, url: str) -> None:
+        self.url = url
+        super().__init__(f"No document response received for {url}")
+
+
 class AsyncFetcher:
     def __init__(
         self,
@@ -163,6 +174,7 @@ class AsyncFetcher:
         *,
         render_html: bool = True,
         total_timeout_seconds: float | None = None,
+        failure_status_callback: Callable[[int, str], None] | None = None,
     ) -> FetchedDocument | None:
         if total_timeout_seconds is not None and total_timeout_seconds <= 0:
             return None
@@ -184,12 +196,15 @@ class AsyncFetcher:
                 )
             except (BrowserHTTPStatusError, PlaywrightError, PlaywrightTimeoutError) as exc:
                 session.fetch_stats.html_playwright_failures += 1
+                self._record_playwright_failure(session.fetch_stats, exc)
+                self._notify_failure_status(failure_status_callback, exc)
                 logger.debug("Browser fetch failed for %s after retries, falling back to HTTP: %s", url, exc)
             else:
                 if document is not None:
                     session.fetch_stats.html_playwright_successes += 1
                     return document
                 session.fetch_stats.html_playwright_failures += 1
+                session.fetch_stats.html_playwright_other_failures += 1
                 return None
 
         session.record_fetch_mode(render_html=render_html, mode="http-only")
@@ -207,6 +222,7 @@ class AsyncFetcher:
                 deadline=deadline,
             )
         except (httpx.TimeoutException, httpx.RequestError, httpx.HTTPStatusError) as exc:
+            self._notify_failure_status(failure_status_callback, exc)
             if render_html:
                 session.fetch_stats.html_http_failures += 1
                 if playwright_attempted:
@@ -253,17 +269,23 @@ class AsyncFetcher:
 
         return None
 
-    async def _create_browser_session(self, http_client: httpx.AsyncClient) -> FetchSession:
-        if not PLAYWRIGHT_AVAILABLE or async_playwright is None:
+    async def _create_browser_session(
+        self,
+        http_client: httpx.AsyncClient,
+        *,
+        playwright: Playwright | None = None,
+    ) -> FetchSession:
+        if playwright is None and (not PLAYWRIGHT_AVAILABLE or async_playwright is None):
             raise RuntimeError(
                 "Playwright is required for HTML fetching. Install the package dependencies and run "
                 f"'playwright install {settings.fetch_browser_name}'."
             )
-        playwright: Playwright | None = None
+        owns_playwright = playwright is None
         browser: Browser | None = None
         browser_context: BrowserContext | None = None
         try:
-            playwright = await async_playwright().start()
+            if playwright is None:
+                playwright = await async_playwright().start()
             browser_factory = getattr(playwright, settings.fetch_browser_name, None)
             if browser_factory is None:
                 raise ValueError(f"Unsupported browser type: {settings.fetch_browser_name}")
@@ -271,6 +293,11 @@ class AsyncFetcher:
             browser_context = await browser.new_context(
                 user_agent=settings.fetch_user_agent,
                 locale="en-US",
+                viewport={
+                    "width": settings.fetch_browser_viewport_width,
+                    "height": settings.fetch_browser_viewport_height,
+                },
+                timezone_id=settings.fetch_browser_timezone_id,
                 extra_http_headers=BROWSER_HEADERS,
             )
             await browser_context.route("**/*", self._handle_route)
@@ -284,7 +311,7 @@ class AsyncFetcher:
             await self._close_browser_artifacts(
                 browser_context=browser_context,
                 browser=browser,
-                playwright=playwright,
+                playwright=playwright if owns_playwright else None,
             )
             raise RuntimeError(
                 f"Failed to start Playwright browser '{settings.fetch_browser_name}'. "
@@ -331,7 +358,7 @@ class AsyncFetcher:
         try:
             response = await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
             if response is None:
-                raise PlaywrightError(f"No document response received for {url}")
+                raise BrowserNoDocumentResponseError(url)
             if response.status >= 400:
                 raise BrowserHTTPStatusError(response.status, response.url)
             remaining_timeout_seconds = max(timeout_seconds - (perf_counter() - started_at), 0.0)
@@ -387,6 +414,36 @@ class AsyncFetcher:
             await browser.close()
         if playwright is not None:
             await playwright.stop()
+
+    @staticmethod
+    def _record_playwright_failure(stats: FetchTransportStats, exc: BaseException) -> None:
+        if isinstance(exc, PlaywrightTimeoutError):
+            stats.html_playwright_timeout_failures += 1
+            return
+        if isinstance(exc, BrowserHTTPStatusError):
+            stats.html_playwright_http_status_failures += 1
+            status_key = str(exc.status_code)
+            stats.html_playwright_failure_status_codes[status_key] = (
+                stats.html_playwright_failure_status_codes.get(status_key, 0) + 1
+            )
+            return
+        if isinstance(exc, BrowserNoDocumentResponseError):
+            stats.html_playwright_no_response_failures += 1
+            return
+        stats.html_playwright_other_failures += 1
+
+    @staticmethod
+    def _notify_failure_status(
+        callback: Callable[[int, str], None] | None,
+        exc: BaseException,
+    ) -> None:
+        if callback is None:
+            return
+        if isinstance(exc, BrowserHTTPStatusError):
+            callback(exc.status_code, exc.url)
+            return
+        if isinstance(exc, httpx.HTTPStatusError):
+            callback(exc.response.status_code, str(exc.response.url))
 
     @staticmethod
     def _is_retryable_exception(exc: BaseException) -> bool:

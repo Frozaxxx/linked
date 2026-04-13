@@ -28,7 +28,7 @@ class InternalLinkingRuntimeMixin:
 
     def _recommendation_budget_reserve_seconds(self) -> float:
         total_budget = max(settings.analyze_time_budget_seconds, 0.0)
-        request_based_budget = max(self._request.timeout_seconds, 0.0) * 0.75
+        request_based_budget = max(settings.request_timeout_seconds, 0.0) * 0.75
         return min(
             RECOMMENDATION_PHASE_MAX_SECONDS,
             total_budget * RECOMMENDATION_PHASE_RESERVE_RATIO,
