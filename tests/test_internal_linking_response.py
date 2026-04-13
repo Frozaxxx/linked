@@ -81,6 +81,26 @@ def test_depth_based_soft_recommendations_skip_weak_generic_branch_urls() -> Non
     assert recommendations == []
 
 
+def test_depth_based_soft_recommendations_skip_news_release_branches() -> None:
+    harness = ResponseFallbackHarness(
+        "https://example.com/platform/autonomous-mobile-observation",
+        "Autonomous mobile observation",
+    )
+
+    recommendations = harness._build_depth_based_recommendations(
+        candidate_depths={
+            "https://example.com/news-release/autonomous-update": 1,
+            "https://example.com/new-release/mobile-observation": 1,
+            "https://example.com/platform/autonomous-mobile-overview": 2,
+        },
+        path=[],
+    )
+
+    assert [recommendation.source_url for recommendation in recommendations] == [
+        "https://example.com/platform/autonomous-mobile-overview",
+    ]
+
+
 def test_soft_recommendations_do_not_prioritize_shallow_url_over_better_match() -> None:
     harness = ResponseFallbackHarness(
         "https://example.com/research/autonomous-mobile-platforms",
@@ -118,3 +138,28 @@ def test_soft_verified_recommendations_ignore_generic_weak_term_matches() -> Non
     )
 
     assert recommendations == []
+
+
+def test_depth_based_soft_recommendations_fill_to_three_with_best_scored_fallbacks() -> None:
+    harness = ResponseFallbackHarness(
+        "https://example.com/platform/autonomous-mobile-observation",
+        "Autonomous mobile observation",
+    )
+
+    recommendations = harness._build_depth_based_recommendations(
+        candidate_depths={
+            "https://example.com/platform/autonomous-mobile-overview": 2,
+            "https://example.com/platform/mobile-sensors": 2,
+            "https://example.com/platform/observation-systems": 3,
+            "https://example.com/docs/archive": 1,
+        },
+        path=[],
+    )
+
+    assert len(recommendations) == 3
+    assert recommendations[0].source_url == "https://example.com/platform/autonomous-mobile-overview"
+    assert {recommendation.source_url for recommendation in recommendations} == {
+        "https://example.com/platform/autonomous-mobile-overview",
+        "https://example.com/platform/mobile-sensors",
+        "https://example.com/platform/observation-systems",
+    }

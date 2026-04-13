@@ -91,6 +91,8 @@ CONTENT_STOP_TERMS = {
         "programs",
         "project",
         "projects",
+        "release",
+        "releases",
         "region",
         "regions",
         "regional",

@@ -15,39 +15,29 @@ from app.services.matcher import extract_url_terms
 
 class LinkPlacementScoringMixin:
     def score_source_url_soft(self, url: str) -> int:
-        if self._is_target_url(url) or self._is_technical_url(url):
+        metrics = self._source_url_score_metrics(url)
+        if not metrics or not self._passes_soft_semantic_gate(metrics):
             return 0
-        shared_path_bonus = self._shared_path_bonus(url)
-        url_terms = set(extract_url_terms(url))
-        overlap_score = self._weighted_overlap_score(url_terms)
-        branch_score = self._weighted_overlap_score(self._branch_overlap_terms(url_terms))
-        core_branch_score = self._weighted_overlap_score(self._core_branch_overlap_terms(url_terms))
-        signature_score = self._weighted_overlap_score(self._signature_overlap_terms(url_terms))
-        legacy_score = score_link(url, "", self._target.priority_terms)
-        if not self._has_soft_semantic_signal(
-            shared_path_bonus=shared_path_bonus,
-            overlap_score=overlap_score,
-            branch_score=branch_score,
-            core_branch_score=core_branch_score,
-            signature_score=signature_score,
-        ):
-            return 0
-        return (
-            shared_path_bonus * 2
-            + overlap_score * 2
-            + branch_score * 3
-            + core_branch_score * 4
-            + signature_score * 2
-            + legacy_score
-        )
+        return metrics["total_score"]
+
+    def score_source_url_fallback(self, url: str) -> int | None:
+        metrics = self._source_url_score_metrics(url)
+        if not metrics or not self._has_fallback_signal(metrics):
+            return None
+        return metrics["total_score"]
 
     def _soft_candidate_score(self, snapshot: CrawledPageSnapshot) -> int:
         metadata_terms = snapshot.url_terms | snapshot.title_terms | snapshot.h1_terms
         candidate_terms = metadata_terms | snapshot.body_terms
-        overlap_score = self._weighted_overlap_score(candidate_terms)
-        branch_score = self._weighted_overlap_score(self._branch_overlap_terms(metadata_terms))
-        core_branch_score = self._weighted_overlap_score(self._core_branch_overlap_terms(metadata_terms))
-        signature_score = self._weighted_overlap_score(self._signature_overlap_terms(candidate_terms))
+        overlap_terms = self._overlapping_target_terms(candidate_terms)
+        metadata_overlap_terms = self._overlapping_target_terms(metadata_terms)
+        branch_terms = self._branch_overlap_terms(metadata_terms)
+        core_branch_terms = self._core_branch_overlap_terms(metadata_terms)
+        signature_terms = self._signature_overlap_terms(candidate_terms)
+        overlap_score = self._weighted_overlap_score(overlap_terms)
+        branch_score = self._weighted_overlap_score(branch_terms)
+        core_branch_score = self._weighted_overlap_score(core_branch_terms)
+        signature_score = self._weighted_overlap_score(signature_terms)
         shared_path_bonus = self._shared_path_bonus(snapshot.url)
         legacy_score = score_link(snapshot.url, snapshot.title, self._target.priority_terms)
         phrase_bonus = 0
@@ -58,41 +48,152 @@ class LinkPlacementScoringMixin:
                 phrase_bonus += 12
             elif self._normalized_target_title in snapshot.normalized_text:
                 phrase_bonus += 8
-        if not self._has_soft_semantic_signal(
-            shared_path_bonus=shared_path_bonus,
-            overlap_score=overlap_score,
-            branch_score=branch_score,
-            core_branch_score=core_branch_score,
-            signature_score=signature_score,
-            phrase_bonus=phrase_bonus,
-        ):
+        metrics = {
+            "shared_path_bonus": shared_path_bonus,
+            "overlap_score": overlap_score,
+            "branch_score": branch_score,
+            "core_branch_score": core_branch_score,
+            "signature_score": signature_score,
+            "phrase_bonus": phrase_bonus,
+            "overlap_terms_count": len(overlap_terms),
+            "metadata_overlap_terms_count": len(metadata_overlap_terms),
+            "branch_terms_count": len(branch_terms),
+            "core_branch_terms_count": len(core_branch_terms),
+            "signature_terms_count": len(signature_terms),
+            "total_score": (
+                overlap_score * 3
+                + branch_score * 4
+                + core_branch_score * 5
+                + signature_score * 3
+                + shared_path_bonus
+                + legacy_score
+                + phrase_bonus
+            ),
+        }
+        if not self._passes_soft_semantic_gate(metrics):
             return 0
+        return metrics["total_score"]
+
+    def _fallback_candidate_score(self, snapshot: CrawledPageSnapshot) -> int | None:
+        metadata_terms = snapshot.url_terms | snapshot.title_terms | snapshot.h1_terms
+        candidate_terms = metadata_terms | snapshot.body_terms
+        overlap_terms = self._overlapping_target_terms(candidate_terms)
+        metadata_overlap_terms = self._overlapping_target_terms(metadata_terms)
+        branch_terms = self._branch_overlap_terms(metadata_terms)
+        core_branch_terms = self._core_branch_overlap_terms(metadata_terms)
+        signature_terms = self._signature_overlap_terms(candidate_terms)
+        overlap_score = self._weighted_overlap_score(overlap_terms)
+        branch_score = self._weighted_overlap_score(branch_terms)
+        core_branch_score = self._weighted_overlap_score(core_branch_terms)
+        signature_score = self._weighted_overlap_score(signature_terms)
+        shared_path_bonus = self._shared_path_bonus(snapshot.url)
+        legacy_score = score_link(snapshot.url, snapshot.title, self._target.priority_terms)
+        phrase_bonus = 0
+        if self._normalized_target_title:
+            if self._normalized_target_title in snapshot.normalized_title:
+                phrase_bonus += 16
+            elif self._normalized_target_title in snapshot.normalized_h1:
+                phrase_bonus += 12
+            elif self._normalized_target_title in snapshot.normalized_text:
+                phrase_bonus += 8
+        metrics = {
+            "shared_path_bonus": shared_path_bonus,
+            "overlap_score": overlap_score,
+            "branch_score": branch_score,
+            "core_branch_score": core_branch_score,
+            "signature_score": signature_score,
+            "phrase_bonus": phrase_bonus,
+            "overlap_terms_count": len(overlap_terms),
+            "metadata_overlap_terms_count": len(metadata_overlap_terms),
+            "branch_terms_count": len(branch_terms),
+            "core_branch_terms_count": len(core_branch_terms),
+            "signature_terms_count": len(signature_terms),
+            "total_score": (
+                overlap_score * 3
+                + branch_score * 4
+                + core_branch_score * 5
+                + signature_score * 3
+                + shared_path_bonus
+                + legacy_score
+                + phrase_bonus
+            ),
+        }
+        if not self._has_fallback_signal(metrics):
+            return None
+        return metrics["total_score"]
+
+    @staticmethod
+    def _passes_soft_semantic_gate(metrics: dict[str, int]) -> bool:
+        semantic_score = (
+            metrics["overlap_score"]
+            + metrics["branch_score"]
+            + metrics["core_branch_score"]
+            + metrics["signature_score"]
+            + metrics.get("phrase_bonus", 0)
+        )
+        if metrics.get("phrase_bonus", 0) >= 8:
+            return True
+        if metrics["core_branch_terms_count"] >= 1:
+            return True
+        if metrics["signature_terms_count"] >= 1 and semantic_score >= 8:
+            return True
+        if metrics["branch_terms_count"] >= 1 and metrics["overlap_terms_count"] >= 2 and semantic_score >= 10:
+            return True
+        if metrics["metadata_overlap_terms_count"] >= 2 and semantic_score >= 10:
+            return True
+        if metrics["overlap_terms_count"] >= 3 and semantic_score >= 12:
+            return True
         return (
-            overlap_score * 2
-            + branch_score * 3
-            + core_branch_score * 4
-            + signature_score * 2
-            + shared_path_bonus
-            + legacy_score
-            + phrase_bonus
+            metrics["shared_path_bonus"] >= 15
+            and metrics["overlap_terms_count"] >= 2
+            and semantic_score >= 8
         )
 
     @staticmethod
-    def _has_soft_semantic_signal(
-        *,
-        shared_path_bonus: int,
-        overlap_score: int,
-        branch_score: int,
-        core_branch_score: int,
-        signature_score: int,
-        phrase_bonus: int = 0,
-    ) -> bool:
-        semantic_score = overlap_score + branch_score + core_branch_score + signature_score + phrase_bonus
-        if semantic_score >= 6:
-            return True
-        if shared_path_bonus >= 15:
-            return True
-        return shared_path_bonus >= 10 and semantic_score >= 3
+    def _has_fallback_signal(metrics: dict[str, int]) -> bool:
+        return bool(
+            metrics["overlap_terms_count"] > 0
+            or metrics["branch_terms_count"] > 0
+            or metrics["core_branch_terms_count"] > 0
+            or metrics["signature_terms_count"] > 0
+            or metrics.get("phrase_bonus", 0) > 0
+            or metrics["shared_path_bonus"] >= 10
+        )
+
+    def _source_url_score_metrics(self, url: str) -> dict[str, int] | None:
+        if self._is_target_url(url) or self._is_technical_url(url):
+            return None
+        shared_path_bonus = self._shared_path_bonus(url)
+        url_terms = set(extract_url_terms(url))
+        overlap_terms = self._overlapping_target_terms(url_terms)
+        branch_terms = self._branch_overlap_terms(url_terms)
+        core_branch_terms = self._core_branch_overlap_terms(url_terms)
+        signature_terms = self._signature_overlap_terms(url_terms)
+        overlap_score = self._weighted_overlap_score(overlap_terms)
+        branch_score = self._weighted_overlap_score(branch_terms)
+        core_branch_score = self._weighted_overlap_score(core_branch_terms)
+        signature_score = self._weighted_overlap_score(signature_terms)
+        legacy_score = score_link(url, "", self._target.priority_terms)
+        return {
+            "shared_path_bonus": shared_path_bonus,
+            "overlap_score": overlap_score,
+            "branch_score": branch_score,
+            "core_branch_score": core_branch_score,
+            "signature_score": signature_score,
+            "overlap_terms_count": len(overlap_terms),
+            "metadata_overlap_terms_count": len(overlap_terms),
+            "branch_terms_count": len(branch_terms),
+            "core_branch_terms_count": len(core_branch_terms),
+            "signature_terms_count": len(signature_terms),
+            "total_score": (
+                overlap_score * 3
+                + branch_score * 4
+                + core_branch_score * 5
+                + signature_score * 3
+                + shared_path_bonus
+                + legacy_score
+            ),
+        }
 
     def _weighted_overlap_score(self, candidate_terms: set[str] | frozenset[str]) -> int:
         return sum(self._target_term_weights.get(term, 0) for term in candidate_terms)

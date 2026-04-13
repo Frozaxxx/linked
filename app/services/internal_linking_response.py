@@ -131,6 +131,18 @@ class InternalLinkingResponseMixin:
                 ),
             )
 
+        if self._needs_more_placement_recommendations(placement_recommendations):
+            placement_recommendations = self._extend_placement_recommendations(
+                placement_recommendations,
+                self._build_forced_recommendations(
+                    crawled_pages=crawled_pages,
+                    discovered_depths=discovered_depths,
+                    verified_candidate_depths=verified_candidate_depths,
+                    sitemap_page_urls=sitemap_page_urls,
+                    path=path,
+                ),
+            )
+
         placement_recommendations = await self._placement_reranker.rerank(
             target=self._target,
             recommendations=placement_recommendations,
@@ -374,6 +386,40 @@ class InternalLinkingResponseMixin:
             verified_depths=candidate_depths,
         )
         return self._sanitize_placement_recommendations(recommendations)
+
+    def _build_forced_recommendations(
+        self,
+        *,
+        crawled_pages: dict[str, CrawledPageSnapshot],
+        discovered_depths: dict[str, int],
+        verified_candidate_depths: dict[str, int],
+        sitemap_page_urls: set[str],
+        path: list[str],
+    ) -> list:
+        excluded_urls = set(path)
+        merged_depths = dict(discovered_depths)
+        self._merge_verified_depths(merged_depths, verified_candidate_depths)
+        candidates = self._placement_recommender.build_soft_verified_recommendations(
+            crawled_pages=crawled_pages,
+            excluded_urls=excluded_urls,
+        )
+        if merged_depths:
+            candidates.extend(
+                self._placement_recommender.build_soft_url_only_recommendations(
+                    sitemap_page_urls=set(merged_depths),
+                    excluded_urls=excluded_urls,
+                    verified_depths=merged_depths,
+                )
+            )
+        structural_pool = set(sitemap_page_urls) | set(merged_depths) | set(self._candidate_parent_urls())
+        if structural_pool:
+            candidates.extend(
+                self._placement_recommender.build_structural_recommendations(
+                    sitemap_page_urls=structural_pool,
+                    excluded_urls=excluded_urls,
+                )
+            )
+        return self._sanitize_placement_recommendations(candidates)
 
     def _candidate_parent_urls(self) -> list[str]:
         if not self._target.url:
