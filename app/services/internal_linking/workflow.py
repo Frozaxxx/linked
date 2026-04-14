@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 class InternalLinkingWorkflowMixin:
     async def analyze(self) -> LinkingAnalyzeResponse:
         if not self._start_url:
-            raise ValueError("РќРµ СѓРґР°Р»РѕСЃСЊ РѕРїСЂРµРґРµР»РёС‚СЊ СЃС‚Р°СЂС‚РѕРІСѓСЋ СЃС‚СЂР°РЅРёС†Сѓ СЃР°Р№С‚Р° РёР· target_url.")
+            raise ValueError("Не удалось определить стартовую страницу сайта из target_url.")
 
         started_at = perf_counter()
         self._deadline_started_at = started_at

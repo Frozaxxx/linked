@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.services.internal_linking_response import InternalLinkingResponseMixin
+from app.services.internal_linking.response import InternalLinkingResponseMixin
 from app.services.link_placement import LinkPlacementRecommender
 from app.services.matcher import SearchTarget
 

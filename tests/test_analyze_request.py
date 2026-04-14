@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from app.schemas import LinkingAnalyzeRequest
 from app.services.internal_linking import InternalLinkingAnalyzer
-from app.services.internal_linking_models import SitemapSnapshot
+from app.models import SitemapSnapshot
 from app.settings import get_settings
 
 

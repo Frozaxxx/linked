@@ -11,7 +11,7 @@ from app.settings import get_settings
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
-router = APIRouter(tags=["РїРµСЂРµР»РёРЅРєРѕРІРєР°"])
+router = APIRouter(tags=["перелинковка"])
 
 
 @router.post(
