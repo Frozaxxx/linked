@@ -1,18 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from app.models import CrawlNode
 
 
 SITEMAP_SCORE_BONUS = 6
-
-
-@dataclass(slots=True)
-class CrawlNode:
-    url: str
-    depth: int
-    path: list[str]
-    score: int = 0
-    sitemap_boosted: bool = False
 
 
 def score_link(url: str, anchor_text: str, priority_terms: tuple[str, ...]) -> int:

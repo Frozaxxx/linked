@@ -2,36 +2,34 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any, AsyncIterator, Callable
 
 import httpx
 from tenacity import AsyncRetrying, retry_if_exception, stop_after_attempt, wait_exponential
 
+from app.services.fetcher.exceptions import (
+    BrowserHTTPStatusError,
+    BrowserNoDocumentResponseError,
+    PlaywrightError,
+    PlaywrightTimeoutError,
+)
+from app.services.fetcher.models import FetchedDocument, FetchTransportStats
+from app.services.fetcher.session import FetchSession
 from app.settings import get_settings
 
 try:
     from playwright.async_api import (
         Browser,
         BrowserContext,
-        Error as PlaywrightError,
         Playwright,
         Route,
-        TimeoutError as PlaywrightTimeoutError,
         async_playwright,
     )
 
     PLAYWRIGHT_AVAILABLE = True
 except ImportError:  # pragma: no cover
     Browser = BrowserContext = Playwright = Route = Any
-
-    class PlaywrightError(Exception):
-        pass
-
-    class PlaywrightTimeoutError(PlaywrightError):
-        pass
-
     async_playwright = None
     PLAYWRIGHT_AVAILABLE = False
 
@@ -49,93 +47,6 @@ DEFAULT_HEADERS = {
 }
 BROWSER_HEADERS = {key: value for key, value in DEFAULT_HEADERS.items() if key != "User-Agent"}
 BLOCKED_RESOURCE_TYPES = {"image", "media", "font"}
-
-
-@dataclass(slots=True)
-class FetchedDocument:
-    requested_url: str
-    final_url: str
-    body: str
-    content_type: str
-    body_bytes: bytes | None = None
-
-
-@dataclass(slots=True)
-class FetchTransportStats:
-    playwright_session_available: bool = False
-    html_playwright_attempts: int = 0
-    html_playwright_successes: int = 0
-    html_playwright_failures: int = 0
-    html_playwright_timeout_failures: int = 0
-    html_playwright_http_status_failures: int = 0
-    html_playwright_no_response_failures: int = 0
-    html_playwright_other_failures: int = 0
-    html_playwright_failure_status_codes: dict[str, int] = field(default_factory=dict)
-    html_http_attempts: int = 0
-    html_http_successes: int = 0
-    html_http_failures: int = 0
-    html_http_fallback_successes: int = 0
-    html_http_fallback_failures: int = 0
-    sitemap_http_attempts: int = 0
-    sitemap_http_successes: int = 0
-    sitemap_http_failures: int = 0
-
-
-@dataclass(slots=True)
-class FetchSession:
-    http_client: httpx.AsyncClient
-    playwright: Playwright | None = None
-    browser: Browser | None = None
-    browser_context: BrowserContext | None = None
-    html_fetch_mode: str = "not-requested"
-    sitemap_fetch_mode: str = "not-requested"
-    fetch_stats: FetchTransportStats = field(default_factory=FetchTransportStats)
-
-    def __post_init__(self) -> None:
-        if self.browser_context is not None:
-            self.fetch_stats.playwright_session_available = True
-
-    def record_fetch_mode(self, *, render_html: bool, mode: str) -> None:
-        if render_html:
-            self.html_fetch_mode = self._merge_fetch_mode(self.html_fetch_mode, mode)
-            return
-        self.sitemap_fetch_mode = self._merge_fetch_mode(self.sitemap_fetch_mode, mode)
-
-    @staticmethod
-    def _merge_fetch_mode(current: str, new: str) -> str:
-        if current == "not-requested":
-            return new
-        if current == new:
-            return current
-        return "mixed"
-
-    async def close(self) -> None:
-        try:
-            if self.browser_context is not None:
-                await self.browser_context.close()
-        finally:
-            try:
-                if self.browser is not None:
-                    await self.browser.close()
-            finally:
-                try:
-                    if self.playwright is not None:
-                        await self.playwright.stop()
-                finally:
-                    await self.http_client.aclose()
-
-
-class BrowserHTTPStatusError(Exception):
-    def __init__(self, status_code: int, url: str) -> None:
-        self.status_code = status_code
-        self.url = url
-        super().__init__(f"Browser fetch failed with status {status_code} for {url}")
-
-
-class BrowserNoDocumentResponseError(PlaywrightError):
-    def __init__(self, url: str) -> None:
-        self.url = url
-        super().__init__(f"No document response received for {url}")
 
 
 class AsyncFetcher:

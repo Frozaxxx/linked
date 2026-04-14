@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict, dataclass
 from typing import Any
 
+from app.models import AnalysisMessageContext, GeneratedAnalysisMessage
 from app.schemas import OptimizationStatus
 from app.services.gigachat_client import create_gigachat_client
 from app.services.link_placement import PlacementRecommendation
@@ -27,41 +27,6 @@ from app.settings import get_settings
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
-
-
-@dataclass(slots=True)
-class AnalysisMessageContext:
-    start_url: str
-    target_url: str | None
-    target_title: str | None
-    found: bool
-    optimization_status: str
-    steps_to_target: int | None
-    good_depth_threshold: int
-    search_depth_limit: int
-    matched_by: list[str]
-    pages_fetched: int
-    pages_discovered: int
-    sitemap_checked: bool
-    found_in_sitemap: bool
-    html_fetch_mode: str
-    sitemap_fetch_mode: str
-    crawl_max_depth: int
-    budget_exhausted: bool
-    depth_cutoff: bool
-    level_truncated: bool
-    truncated_levels: int
-    truncated_nodes: int
-    path: list[str]
-    placement_recommendations: list[PlacementRecommendation]
-
-
-@dataclass(slots=True)
-class GeneratedAnalysisMessage:
-    text: str
-    source: str
-    error: str | None = None
-
 
 class LinkingAnalysisMessageGenerator:
     def __init__(self) -> None:
@@ -114,7 +79,7 @@ class LinkingAnalysisMessageGenerator:
 
     @staticmethod
     def _build_prompt(context: AnalysisMessageContext) -> str:
-        payload = asdict(context)
+        payload = context.model_dump(mode="json")
         prompt = LinkingAnalysisMessageGenerator._resolve_prompt(context)
         if context.target_title:
             prompt += (
