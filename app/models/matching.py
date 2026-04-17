@@ -7,6 +7,7 @@ class SearchTarget(SeoLinkedModel):
     url: str | None
     title: str | None
     text: str | None
+    canonical_url: str | None = None
     equivalent_urls: tuple[str, ...] = ()
 
     @property
@@ -97,21 +98,31 @@ class SearchTarget(SeoLinkedModel):
         return tuple(terms)
 
     def url_matches(self, candidate_url: str) -> bool:
+        return self.url_match_reason(candidate_url) is not None
+
+    def url_match_reason(self, candidate_url: str) -> str | None:
         if not candidate_url:
-            return False
+            return None
 
         if self.url and candidate_url == self.url:
-            return True
+            return "url"
 
-        return candidate_url in self.equivalent_urls
+        if self.canonical_url and candidate_url == self.canonical_url:
+            return "canonical_url"
+
+        if candidate_url in self.equivalent_urls:
+            return "equivalent_url"
+
+        return None
 
     def page_matches(self, candidate_url: str, title: str, text: str) -> list[str]:
         from app.services.matcher import normalize_text, terms_overlap_match
 
         matched_by: list[str] = []
 
-        if self.url_matches(candidate_url):
-            matched_by.append("url")
+        url_match_reason = self.url_match_reason(candidate_url)
+        if url_match_reason:
+            matched_by.append(url_match_reason)
 
         page_title = normalize_text(title)
         target_title = normalize_text(self.title)

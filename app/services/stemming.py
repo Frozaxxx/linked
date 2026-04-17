@@ -4,7 +4,7 @@ import re
 
 try:
     from simplemma import lemmatize
-except ImportError:  # pragma: no cover - dependency should be installed in runtime
+except ImportError:
     lemmatize = None
 
 

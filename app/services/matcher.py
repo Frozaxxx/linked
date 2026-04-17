@@ -54,15 +54,6 @@ SIGNATURE_STOP_TERMS = {
     "project",
     "projects",
 }
-HOST_STOP_TOKENS = {
-    "com",
-    "edu",
-    "gov",
-    "net",
-    "org",
-    "ru",
-    "www",
-}
 CONTENT_STOP_TERMS = {
     stem_token(token)
     for token in {

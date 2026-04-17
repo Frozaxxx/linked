@@ -3,7 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from app.services.link_placement_models import PlacementRecommendation
-from app.services.llm_summary_templates import build_static_message
+from app.services.llm_summary_templates import build_static_message, finalize_message
 
 
 def make_recommendation(
@@ -148,7 +148,8 @@ def test_soft_candidates_message_marks_current_crawl_depth_when_truncated() -> N
 
     assert message is not None
     assert "Целевая страница есть в sitemap" in message
-    assert "Обход был неполным, поэтому это еще не доказывает слабую перелинковку" in message
+    assert "Мы анализируем только страницы, достижимые от главной не более чем за 4 шагов" in message
+    assert "Целевая страница есть на сайте, но в эту область подтвержденно не попала" in message
     assert "глубина в текущем запуске: 1" in message
     assert "URL-кандидатов по мягкой семантической оценке" in message
 
@@ -170,6 +171,63 @@ def test_candidate_reason_label_keeps_url_acronym_uppercase() -> None:
 
     assert message is not None
     assert "URL этой страницы семантически ближе всего" in message
+
+
+def test_good_message_ignores_soft_candidates() -> None:
+    recommendation = make_recommendation(
+        "https://example.com/section/best-donor",
+        depth=2,
+        projected_steps=3,
+        reason="ключевые слова URL: target, page, guide",
+    )
+    context = make_context(
+        found=True,
+        optimization_status="good",
+        steps_to_target=2,
+        placement_recommendations=[recommendation],
+    )
+
+    message = build_static_message(context)
+
+    assert message is not None
+    assert "Перелинковка хорошая" in message
+    assert "Пользователь быстро доберется до страницы" in message
+    assert "URL-кандидатов" not in message
+    assert recommendation.source_url not in message
+
+
+def test_good_message_explains_canonical_url_match() -> None:
+    context = make_context(
+        found=True,
+        optimization_status="good",
+        steps_to_target=4,
+        matched_by=["canonical_url"],
+    )
+
+    message = build_static_message(context)
+
+    assert message is not None
+    assert "каноническая версия целевой страницы находится за 4 шага" in message
+
+
+def test_finalize_good_message_does_not_append_candidates() -> None:
+    recommendation = make_recommendation(
+        "https://example.com/section/best-donor",
+        depth=2,
+        projected_steps=3,
+    )
+    context = make_context(
+        found=True,
+        optimization_status="good",
+        steps_to_target=2,
+        placement_recommendations=[recommendation],
+    )
+
+    message = finalize_message("Перелинковка хорошая.", context)
+
+    assert "URL-кандидатов" not in message
+    assert recommendation.source_url not in message
+    assert "Пользователь быстро доберется до страницы" in message
 
 
 def test_access_issue_message_reports_playwright_and_http_modes() -> None:

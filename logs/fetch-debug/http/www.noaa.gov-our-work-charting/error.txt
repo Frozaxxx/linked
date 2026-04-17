@@ -1,0 +1,2 @@
+HTTPStatusError: Client error '404 Not Found' for url 'https://www.noaa.gov/node/20'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404

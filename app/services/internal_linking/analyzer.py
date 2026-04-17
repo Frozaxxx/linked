@@ -88,6 +88,7 @@ class InternalLinkingAnalyzer(
         primary_url: str | None = None,
         title: str | None = None,
         equivalent_urls: set[str] | None = None,
+        canonical_url: str | None = None,
     ) -> None:
         resolved_target_url = primary_url or self._requested_target_url
         normalized_equivalents = tuple(
@@ -97,9 +98,13 @@ class InternalLinkingAnalyzer(
             url=resolved_target_url,
             title=title if title is not None else self._requested_target_title,
             text=self._requested_target_text,
+            canonical_url=canonical_url if canonical_url != resolved_target_url else None,
             equivalent_urls=normalized_equivalents,
         )
         self._placement_recommender = self._build_placement_recommender()
+
+    def _target_url_match_reason(self, url: str) -> str:
+        return self._target.url_match_reason(url) or "url"
 
     def _is_allowed_by_robots(self, url: str) -> bool:
         if not settings.obey_robots_txt or self._robots_policy is None:

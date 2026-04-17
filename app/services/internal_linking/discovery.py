@@ -67,10 +67,12 @@ class InternalLinkingDiscoveryMixin:
         if not self._is_allowed_by_robots(self._requested_target_url):
             logger.warning("Requested target URL is blocked by robots.txt: %s", self._requested_target_url)
             return 0
+        # Target metadata improves matching quality, but it is optional and must not
+        # consume the entire crawl budget before BFS even starts.
         document = await self._fetcher.fetch(
             client,
             self._requested_target_url,
-            total_timeout_seconds=self._remaining_fetch_budget_seconds(),
+            total_timeout_seconds=self._target_metadata_timeout_seconds(),
         )
         if document is None:
             logger.warning("Failed to fetch requested target URL metadata: %s", self._requested_target_url)
@@ -85,17 +87,25 @@ class InternalLinkingDiscoveryMixin:
             return 0
         page = parse_html(document.body, normalized_final_url, self._allowed_host)
         equivalent_urls = {self._requested_target_url, normalized_final_url}
-        resolved_target_url = normalized_final_url
+        resolved_target_url = self._requested_target_url
+        canonical_url = None
         if page.canonical_url and is_internal_url(page.canonical_url, self._allowed_host):
             equivalent_urls.add(page.canonical_url)
-            resolved_target_url = page.canonical_url
+            canonical_url = page.canonical_url
         resolved_title = self._requested_target_title or page.h1 or page.title or None
         self._replace_target(
             primary_url=resolved_target_url,
             title=resolved_title,
             equivalent_urls=equivalent_urls,
+            canonical_url=canonical_url,
         )
         return 1
+
+    def _target_metadata_timeout_seconds(self) -> float | None:
+        remaining_budget = self._remaining_fetch_budget_seconds()
+        if remaining_budget is None:
+            return settings.request_timeout_seconds
+        return min(remaining_budget, settings.request_timeout_seconds)
 
     async def _await_sitemap_for_recommendations(
         self,

@@ -1,0 +1,2 @@
+HTTPStatusError: Server error '502 Bad Gateway' for url 'https://www.noaa.gov/sitemap.xml'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502

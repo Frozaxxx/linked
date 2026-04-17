@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Literal
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -25,7 +26,7 @@ class Settings(BaseSettings):
     analyze_summary: str = "Проверить внутреннюю перелинковку до целевой страницы"
 
     request_timeout_seconds: float = 20.0
-    request_retry_count: int = 1
+    request_retry_count: int = 3
     crawl_concurrency: int = 4
     good_depth_threshold: int = 4
     crawl_max_depth: int = 4
@@ -80,13 +81,29 @@ class Settings(BaseSettings):
         "Chrome/133.0.0.0 Safari/537.36"
     )
     fetch_accept_header: str = "text/html,application/xhtml+xml,application/xml,text/xml;q=0.9,*/*;q=0.8"
+    fetch_trust_env: bool = False
+    fetch_max_connections: int = 20
+    fetch_max_keepalive_connections: int = 10
+    fetch_html_max_bytes: int = 65_536
+    fetch_html_early_return_bytes: int = 16_384
+    fetch_browser_enabled: bool = True
+    fetch_html_render_mode: Literal["auto", "http-only", "browser-only"] = "auto"
+    fetch_browser_ws_endpoint: str | None = "ws://localhost:3000"
+    fetch_browser_token: str | None = "seo-linked-dev-token"
     fetch_browser_name: str = "chromium"
     fetch_browser_headless: bool = True
+    fetch_browser_stealth_enabled: bool = True
+    fetch_browser_randomize_fingerprint: bool = True
+    fetch_browser_ignore_https_errors: bool = True
     fetch_browser_viewport_width: int = 1366
     fetch_browser_viewport_height: int = 768
     fetch_browser_timezone_id: str = "America/New_York"
     fetch_browser_network_idle_timeout_ms: int = 1500
     fetch_browser_post_load_wait_ms: int = 250
+    fetch_browser_timeout_disable_threshold: int = 2
+    fetch_browser_status_disable_threshold: int = 2
+    fetch_debug_artifacts_enabled: bool = True
+    fetch_debug_artifacts_dir: str = "logs/fetch-debug"
 
 
 @lru_cache(maxsize=1)

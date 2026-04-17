@@ -59,14 +59,27 @@ class FetchStats(SeoLinkedModel):
     html_playwright_no_response_failures: int
     html_playwright_other_failures: int
     html_playwright_failure_status_codes: dict[str, int]
+    html_playwright_partial_successes: int
     html_http_attempts: int
     html_http_successes: int
     html_http_failures: int
+    html_http_timeout_failures: int
+    html_http_status_failures: int
+    html_http_request_failures: int
+    html_http_failure_status_codes: dict[str, int]
+    html_http_partial_successes: int
+    html_http_range_attempts: int
+    html_http_range_successes: int
+    html_http_range_failures: int
     html_http_fallback_successes: int
     html_http_fallback_failures: int
     sitemap_http_attempts: int
     sitemap_http_successes: int
     sitemap_http_failures: int
+    sitemap_http_timeout_failures: int
+    sitemap_http_status_failures: int
+    sitemap_http_request_failures: int
+    sitemap_http_failure_status_codes: dict[str, int]
 
 
 class LinkingAnalyzeResponse(SeoLinkedModel):
@@ -102,7 +115,7 @@ class LinkingAnalyzeResponse(SeoLinkedModel):
             "example": {
                 "start_url": "https://example.com/",
                 "target_url": "https://example.com/catalog/target-page",
-                "fetch_summary": "HTML: Playwright; sitemap: HTTP-only.",
+                "fetch_summary": "HTML: HTTP -> Playwright fallback; sitemap: HTTP-only.",
                 "fetch_stats": {
                     "playwright_session_available": True,
                     "html_playwright_attempts": 7,
@@ -113,14 +126,27 @@ class LinkingAnalyzeResponse(SeoLinkedModel):
                     "html_playwright_no_response_failures": 0,
                     "html_playwright_other_failures": 0,
                     "html_playwright_failure_status_codes": {"503": 1},
+                    "html_playwright_partial_successes": 0,
                     "html_http_attempts": 1,
                     "html_http_successes": 1,
                     "html_http_failures": 0,
+                    "html_http_timeout_failures": 0,
+                    "html_http_status_failures": 0,
+                    "html_http_request_failures": 0,
+                    "html_http_failure_status_codes": {},
+                    "html_http_partial_successes": 0,
+                    "html_http_range_attempts": 0,
+                    "html_http_range_successes": 0,
+                    "html_http_range_failures": 0,
                     "html_http_fallback_successes": 1,
                     "html_http_fallback_failures": 0,
                     "sitemap_http_attempts": 1,
                     "sitemap_http_successes": 1,
                     "sitemap_http_failures": 0,
+                    "sitemap_http_timeout_failures": 0,
+                    "sitemap_http_status_failures": 0,
+                    "sitemap_http_request_failures": 0,
+                    "sitemap_http_failure_status_codes": {},
                 },
                 "found": True,
                 "matched_by": ["url"],
@@ -146,7 +172,7 @@ class LinkingAnalyzeResponse(SeoLinkedModel):
                 "robots_blocked_urls": 0,
                 "sitemap_checked": True,
                 "found_in_sitemap": True,
-                "html_fetch_mode": "playwright",
+                "html_fetch_mode": "http-to-playwright",
                 "sitemap_fetch_mode": "http-only",
                 "strategy": "bfs + live sitemap",
                 "timings": {

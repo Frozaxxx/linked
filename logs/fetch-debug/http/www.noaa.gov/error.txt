@@ -1,0 +1,2 @@
+HTTPStatusError: Server error '504 Gateway Time-out' for url 'https://www.noaa.gov/'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/504

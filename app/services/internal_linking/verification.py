@@ -8,7 +8,7 @@ from app.models import CrawledPageSnapshot, TargetVerificationResult
 from app.services.frontier import CrawlNode, prioritize, score_link
 from app.services.fetcher import FetchSession
 from app.services.internal_linking.constants import MAX_RECOMMENDATION_SOURCE_DEPTH
-from app.services.parser import is_internal_url, normalize_url
+from app.services.parser import is_internal_url, normalize_url, parse_html
 from app.settings import get_settings
 
 
@@ -248,4 +248,71 @@ class InternalLinkingVerificationMixin:
             fetched_count,
             max_depth,
         )
+        return TargetVerificationResult(pages_fetched=fetched_count)
+
+    async def _verify_target_parent_bridge(
+        self,
+        *,
+        client: FetchSession,
+        crawled_pages: dict[str, CrawledPageSnapshot],
+        discovered_depths: dict[str, int],
+        discovered_paths: dict[str, list[str]],
+        max_depth: int,
+        reserve_seconds: float = 0.0,
+    ) -> TargetVerificationResult:
+        if not self._target.url:
+            return TargetVerificationResult()
+
+        fetched_count = 0
+        for parent_url in self._candidate_parent_urls():
+            parent_depth = discovered_depths.get(parent_url)
+            if parent_depth is None or parent_depth >= max_depth:
+                continue
+            if self._budget_exhausted(reserve_seconds=reserve_seconds):
+                logger.info("Target parent bridge verification stopped because the analysis budget was exhausted.")
+                break
+            if not self._is_allowed_by_robots(parent_url):
+                continue
+
+            async with self._semaphore:
+                document = await self._fetcher.fetch(
+                    client,
+                    parent_url,
+                    total_timeout_seconds=self._remaining_fetch_budget_seconds(),
+                    prefer_partial_html=False,
+                )
+            if document is None:
+                continue
+
+            fetched_count += 1
+            normalized_final_url = normalize_url(document.final_url)
+            if not normalized_final_url or not is_internal_url(normalized_final_url, self._allowed_host):
+                continue
+            if not self._is_allowed_by_robots(normalized_final_url):
+                continue
+
+            page = parse_html(document.body, normalized_final_url, self._allowed_host)
+            parent_path = discovered_paths.get(parent_url) or discovered_paths.get(normalized_final_url)
+            if parent_path is None:
+                parent_path = [self._start_url, normalized_final_url] if self._start_url else [normalized_final_url]
+
+            snapshot = self._placement_recommender.build_snapshot(
+                url=page.url,
+                title=page.title,
+                h1=page.h1,
+                depth=parent_depth,
+                text=page.text,
+                is_indexable=page.is_indexable,
+                links_to_target=bool(any(self._target.url_matches(link.url) for link in page.links)),
+            )
+            self._remember_crawled_page(crawled_pages, snapshot)
+
+            for link in page.links:
+                if self._target.url_matches(link.url):
+                    return TargetVerificationResult(
+                        steps_to_target=parent_depth + 1,
+                        path=parent_path + [link.url],
+                        pages_fetched=fetched_count,
+                    )
+
         return TargetVerificationResult(pages_fetched=fetched_count)

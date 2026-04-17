@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import gzip
 
-from app.services.parser import normalize_url, parse_robots_txt
+from app.services.parser import normalize_url, parse_html, parse_robots_txt
 from app.services.parser import parse_sitemap
 
 
@@ -63,3 +63,35 @@ def test_parse_sitemap_supports_gzip_payload() -> None:
 
     assert parsed.page_urls == ["https://example.com/section/page"]
     assert parsed.nested_sitemaps == []
+
+
+def test_parse_html_extracts_page_metadata_and_internal_links_with_beautifulsoup() -> None:
+    page = parse_html(
+        """
+        <html>
+          <head>
+            <title>Example page</title>
+            <link rel="canonical" href="/canonical">
+            <meta name="robots" content="index,follow">
+          </head>
+          <body>
+            <h1>Main title</h1>
+            <p>Visible text</p>
+            <a href="/inside">Inside</a>
+            <a href="https://external.example/page">External</a>
+            <script>hidden()</script>
+          </body>
+        </html>
+        """,
+        "https://example.com/page",
+        "example.com",
+    )
+
+    assert page.title == "Example page"
+    assert page.h1 == "Main title"
+    assert page.canonical_url == "https://example.com/canonical"
+    assert page.text == "Main title Visible text Inside External"
+    assert page.is_indexable is False
+    assert [(link.url, link.anchor_text) for link in page.links] == [
+        ("https://example.com/inside", "Inside"),
+    ]

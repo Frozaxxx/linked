@@ -1,0 +1,2 @@
+HTTPStatusError: Client error '404 Not Found' for url 'https://lenta.ru/rubrics/realty/2026/04/17'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404

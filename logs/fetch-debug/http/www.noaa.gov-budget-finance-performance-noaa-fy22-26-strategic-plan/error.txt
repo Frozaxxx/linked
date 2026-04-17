@@ -1,0 +1,2 @@
+HTTPStatusError: Client error '403 Forbidden' for url 'https://www.noaa.gov/budget-finance-performance/noaa-fy22-26-strategic-plan'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/403

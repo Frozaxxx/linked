@@ -1,0 +1,13 @@
+services:
+  browserless:
+    image: ghcr.io/browserless/chromium
+    restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    ports:
+      - "${BROWSERLESS_PORT:-3000}:3000"
+    environment:
+      CONCURRENT: "${BROWSERLESS_CONCURRENT:-4}"
+      TIMEOUT: "${BROWSERLESS_TIMEOUT_MS:-180000}"
+      TOKEN: "${BROWSERLESS_TOKEN:-seo-linked-dev-token}"

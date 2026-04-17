@@ -21,6 +21,9 @@ TECHNICAL_URL_TOKENS = {
     "checkout",
     "compare",
     "comparison",
+    "comment",
+    "comment-modal",
+    "comments",
     "cookie",
     "cookies",
     "error",
@@ -35,6 +38,7 @@ TECHNICAL_URL_TOKENS = {
     "logout",
     "media",
     "multimedia",
+    "modal",
     "new-release",
     "news",
     "news-release",
@@ -59,6 +63,7 @@ TECHNICAL_URL_TOKENS = {
     "videos",
     "webinar",
     "webinars",
+    "webmaster",
     "wp-admin",
     "wp-login",
 }
@@ -66,6 +71,7 @@ TECHNICAL_URL_TOKENS = {
 TECHNICAL_QUERY_TOKENS = {
     "filter",
     "filters",
+    "email",
     "page",
     "paged",
     "q",
@@ -74,6 +80,8 @@ TECHNICAL_QUERY_TOKENS = {
     "s",
     "search",
     "sort",
+    "url",
+    "webmaster",
 }
 
 TECHNICAL_TITLE_PHRASES = (

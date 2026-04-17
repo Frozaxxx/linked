@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 
 from app.models import CrawledPageSnapshot
-from app.schemas import CrawlDiagnostics, FetchStats, LinkingAnalyzeResponse
+from app.schemas import CrawlDiagnostics, FetchStats, LinkingAnalyzeResponse, OptimizationStatus
 from app.services.fetcher import FetchSession
 from app.services.llm_summary import AnalysisMessageContext
 from app.services.internal_linking.recommendations import InternalLinkingRecommendationMixin
@@ -36,6 +36,11 @@ class InternalLinkingResponseMixin(InternalLinkingRecommendationMixin):
     ) -> LinkingAnalyzeResponse:
         status = self._resolve_optimization_status(found=found, steps_to_target=steps_to_target)
         verified_candidate_depths: dict[str, int] = {}
+        can_use_url_only_recommendations = self._can_use_url_only_recommendations(
+            pages_fetched=pages_fetched,
+            pages_discovered=pages_discovered,
+            sitemap_page_urls=sitemap_page_urls,
+        )
         placement_recommendations = self._extend_placement_recommendations(
             [],
             self._placement_recommender.build_soft_verified_recommendations(
@@ -44,7 +49,11 @@ class InternalLinkingResponseMixin(InternalLinkingRecommendationMixin):
             ),
         )
 
-        if self._needs_more_placement_recommendations(placement_recommendations) and discovered_depths:
+        if (
+            self._needs_more_placement_recommendations(placement_recommendations)
+            and discovered_depths
+            and can_use_url_only_recommendations
+        ):
             placement_recommendations = self._extend_placement_recommendations(
                 placement_recommendations,
                 self._build_depth_based_recommendations(
@@ -62,7 +71,11 @@ class InternalLinkingResponseMixin(InternalLinkingRecommendationMixin):
                 ),
             )
 
-        if self._needs_more_placement_recommendations(placement_recommendations) and self._target.url:
+        if (
+            self._needs_more_placement_recommendations(placement_recommendations)
+            and self._target.url
+            and can_use_url_only_recommendations
+        ):
             placement_recommendations = self._extend_placement_recommendations(
                 placement_recommendations,
                 self._placement_recommender.build_structural_recommendations(
@@ -126,7 +139,7 @@ class InternalLinkingResponseMixin(InternalLinkingRecommendationMixin):
                 ),
             )
 
-        if self._needs_more_placement_recommendations(placement_recommendations):
+        if self._needs_more_placement_recommendations(placement_recommendations) and can_use_url_only_recommendations:
             placement_recommendations = self._extend_placement_recommendations(
                 placement_recommendations,
                 self._build_forced_recommendations(
@@ -142,6 +155,9 @@ class InternalLinkingResponseMixin(InternalLinkingRecommendationMixin):
             target=self._target,
             recommendations=placement_recommendations,
         )
+        if status == OptimizationStatus.GOOD:
+            placement_recommendations = []
+
         generated_message = await self._message_generator.generate(
             AnalysisMessageContext(
                 start_url=self._start_url,
@@ -199,7 +215,7 @@ class InternalLinkingResponseMixin(InternalLinkingRecommendationMixin):
             found_in_sitemap,
         )
         logger.info(
-            "Fetch stats: start_url=%s playwright_available=%s html_playwright_attempts=%s html_playwright_successes=%s html_playwright_failures=%s html_playwright_timeout_failures=%s html_playwright_http_status_failures=%s html_playwright_no_response_failures=%s html_playwright_other_failures=%s html_playwright_failure_status_codes=%s html_http_attempts=%s html_http_successes=%s html_http_failures=%s html_http_fallback_successes=%s html_http_fallback_failures=%s sitemap_http_attempts=%s sitemap_http_successes=%s sitemap_http_failures=%s",
+            "Fetch stats: start_url=%s playwright_available=%s html_playwright_attempts=%s html_playwright_successes=%s html_playwright_failures=%s html_playwright_timeout_failures=%s html_playwright_http_status_failures=%s html_playwright_no_response_failures=%s html_playwright_other_failures=%s html_playwright_failure_status_codes=%s html_playwright_partial_successes=%s html_http_attempts=%s html_http_successes=%s html_http_failures=%s html_http_timeout_failures=%s html_http_status_failures=%s html_http_request_failures=%s html_http_failure_status_codes=%s html_http_partial_successes=%s html_http_range_attempts=%s html_http_range_successes=%s html_http_range_failures=%s html_http_fallback_successes=%s html_http_fallback_failures=%s sitemap_http_attempts=%s sitemap_http_successes=%s sitemap_http_failures=%s sitemap_http_timeout_failures=%s sitemap_http_status_failures=%s sitemap_http_request_failures=%s sitemap_http_failure_status_codes=%s",
             self._start_url,
             client.fetch_stats.playwright_session_available,
             client.fetch_stats.html_playwright_attempts,
@@ -210,14 +226,27 @@ class InternalLinkingResponseMixin(InternalLinkingRecommendationMixin):
             client.fetch_stats.html_playwright_no_response_failures,
             client.fetch_stats.html_playwright_other_failures,
             client.fetch_stats.html_playwright_failure_status_codes,
+            client.fetch_stats.html_playwright_partial_successes,
             client.fetch_stats.html_http_attempts,
             client.fetch_stats.html_http_successes,
             client.fetch_stats.html_http_failures,
+            client.fetch_stats.html_http_timeout_failures,
+            client.fetch_stats.html_http_status_failures,
+            client.fetch_stats.html_http_request_failures,
+            client.fetch_stats.html_http_failure_status_codes,
+            client.fetch_stats.html_http_partial_successes,
+            client.fetch_stats.html_http_range_attempts,
+            client.fetch_stats.html_http_range_successes,
+            client.fetch_stats.html_http_range_failures,
             client.fetch_stats.html_http_fallback_successes,
             client.fetch_stats.html_http_fallback_failures,
             client.fetch_stats.sitemap_http_attempts,
             client.fetch_stats.sitemap_http_successes,
             client.fetch_stats.sitemap_http_failures,
+            client.fetch_stats.sitemap_http_timeout_failures,
+            client.fetch_stats.sitemap_http_status_failures,
+            client.fetch_stats.sitemap_http_request_failures,
+            client.fetch_stats.sitemap_http_failure_status_codes,
         )
         if not found and not placement_recommendations:
             logger.warning(
@@ -243,14 +272,27 @@ class InternalLinkingResponseMixin(InternalLinkingRecommendationMixin):
                 html_playwright_no_response_failures=client.fetch_stats.html_playwright_no_response_failures,
                 html_playwright_other_failures=client.fetch_stats.html_playwright_other_failures,
                 html_playwright_failure_status_codes=dict(client.fetch_stats.html_playwright_failure_status_codes),
+                html_playwright_partial_successes=client.fetch_stats.html_playwright_partial_successes,
                 html_http_attempts=client.fetch_stats.html_http_attempts,
                 html_http_successes=client.fetch_stats.html_http_successes,
                 html_http_failures=client.fetch_stats.html_http_failures,
+                html_http_timeout_failures=client.fetch_stats.html_http_timeout_failures,
+                html_http_status_failures=client.fetch_stats.html_http_status_failures,
+                html_http_request_failures=client.fetch_stats.html_http_request_failures,
+                html_http_failure_status_codes=dict(client.fetch_stats.html_http_failure_status_codes),
+                html_http_partial_successes=client.fetch_stats.html_http_partial_successes,
+                html_http_range_attempts=client.fetch_stats.html_http_range_attempts,
+                html_http_range_successes=client.fetch_stats.html_http_range_successes,
+                html_http_range_failures=client.fetch_stats.html_http_range_failures,
                 html_http_fallback_successes=client.fetch_stats.html_http_fallback_successes,
                 html_http_fallback_failures=client.fetch_stats.html_http_fallback_failures,
                 sitemap_http_attempts=client.fetch_stats.sitemap_http_attempts,
                 sitemap_http_successes=client.fetch_stats.sitemap_http_successes,
                 sitemap_http_failures=client.fetch_stats.sitemap_http_failures,
+                sitemap_http_timeout_failures=client.fetch_stats.sitemap_http_timeout_failures,
+                sitemap_http_status_failures=client.fetch_stats.sitemap_http_status_failures,
+                sitemap_http_request_failures=client.fetch_stats.sitemap_http_request_failures,
+                sitemap_http_failure_status_codes=dict(client.fetch_stats.sitemap_http_failure_status_codes),
             ),
             found=found,
             matched_by=matched_by,
@@ -283,6 +325,15 @@ class InternalLinkingResponseMixin(InternalLinkingRecommendationMixin):
         )
 
     @staticmethod
+    def _can_use_url_only_recommendations(
+        *,
+        pages_fetched: int,
+        pages_discovered: int,
+        sitemap_page_urls: set[str],
+    ) -> bool:
+        return pages_fetched > 0 or pages_discovered > 1 or bool(sitemap_page_urls)
+
+    @staticmethod
     def _build_fetch_summary(*, html_fetch_mode: str, sitemap_fetch_mode: str) -> str:
         return f"{InternalLinkingResponseMixin._html_fetch_summary(html_fetch_mode)}; {InternalLinkingResponseMixin._sitemap_fetch_summary(sitemap_fetch_mode)}."
 
@@ -292,8 +343,12 @@ class InternalLinkingResponseMixin(InternalLinkingRecommendationMixin):
             return "HTML: Playwright"
         if mode == "http-only":
             return "HTML: HTTP-only"
-        if mode == "mixed":
+        if mode == "http-to-playwright":
+            return "HTML: HTTP -> Playwright fallback"
+        if mode == "playwright-to-http":
             return "HTML: Playwright -> HTTP fallback"
+        if mode == "mixed":
+            return "HTML: mixed transports"
         return "HTML: not requested"
 
     @staticmethod
@@ -302,6 +357,10 @@ class InternalLinkingResponseMixin(InternalLinkingRecommendationMixin):
             return "sitemap: Playwright"
         if mode == "http-only":
             return "sitemap: HTTP-only"
-        if mode == "mixed":
+        if mode == "http-to-playwright":
+            return "sitemap: HTTP -> Playwright fallback"
+        if mode == "playwright-to-http":
             return "sitemap: Playwright -> HTTP fallback"
+        if mode == "mixed":
+            return "sitemap: mixed transports"
         return "sitemap: not requested"

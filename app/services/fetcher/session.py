@@ -32,6 +32,7 @@ class FetchSession:
         self.html_fetch_mode = html_fetch_mode
         self.sitemap_fetch_mode = sitemap_fetch_mode
         self.fetch_stats = fetch_stats or FetchTransportStats()
+        self.browser_unavailable = False
         if self.browser_context is not None:
             self.fetch_stats.playwright_session_available = True
 
@@ -47,6 +48,10 @@ class FetchSession:
             return new
         if current == new:
             return current
+        if current == "http-only" and new == "playwright":
+            return "http-to-playwright"
+        if current == "playwright" and new == "http-only":
+            return "playwright-to-http"
         return "mixed"
 
     async def close(self) -> None:

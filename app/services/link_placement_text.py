@@ -27,6 +27,12 @@ from app.services.matcher import (
 class LinkPlacementTextMixin:
     def _build_soft_relevance_reason(self, snapshot: CrawledPageSnapshot) -> str:
         metadata_terms = snapshot.url_terms | snapshot.title_terms | snapshot.h1_terms
+        title_h1_overlap = list(self._overlapping_target_terms(snapshot.title_terms | snapshot.h1_terms))
+        if title_h1_overlap:
+            return f"Совпадение в title/H1 проверенной страницы по терминам: {', '.join(sorted(title_h1_overlap)[:4])}."
+        metadata_overlap = list(self._overlapping_target_terms(metadata_terms))
+        if metadata_overlap:
+            return f"Совпадение в URL/title/H1 проверенной страницы по терминам: {', '.join(sorted(metadata_overlap)[:4])}."
         overlap = list(self._overlapping_target_terms(metadata_terms | snapshot.body_terms))
         if overlap:
             return f"Совпадение на проверенной странице по терминам: {', '.join(sorted(overlap)[:4])}."

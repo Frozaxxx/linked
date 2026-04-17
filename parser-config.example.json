@@ -1,0 +1,17 @@
+{
+  "url": "https://example.com",
+  "rules": [
+    {
+      "name": "cards",
+      "selector": ".product-card",
+      "fallback_selectors": [".card", "article"],
+      "multiple": true
+    },
+    {
+      "name": "links",
+      "selector": "a",
+      "attr": "href",
+      "multiple": true
+    }
+  ]
+}

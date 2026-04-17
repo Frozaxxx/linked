@@ -20,15 +20,11 @@ RECOMMENDATION_MARKERS = (
 
 
 def build_static_message(context: AnalysisMessageContext) -> str | None:
+    if context.optimization_status == "good" and context.steps_to_target is not None:
+        return build_good_message(context)
+
     if context.placement_recommendations:
         return build_soft_candidates_message(context)
-
-    if context.optimization_status == "good" and context.steps_to_target is not None:
-        return (
-            "Перелинковка выглядит хорошей: "
-            f"целевая страница находится за {context.steps_to_target} {step_word(context.steps_to_target)} "
-            f"при пороге {context.good_depth_threshold}."
-        )
 
     if has_site_access_issue(context):
         return build_access_issue_message(context)
@@ -37,6 +33,9 @@ def build_static_message(context: AnalysisMessageContext) -> str | None:
 
 
 def build_fallback_message(context: AnalysisMessageContext) -> str:
+    if context.optimization_status == "good" and context.steps_to_target is not None:
+        return build_good_message(context)
+
     if context.placement_recommendations:
         return build_soft_candidates_message(context)
 
@@ -51,6 +50,9 @@ def build_fallback_message(context: AnalysisMessageContext) -> str:
 
 
 def finalize_message(message: str, context: AnalysisMessageContext) -> str:
+    if context.optimization_status == "good" and context.steps_to_target is not None:
+        return build_good_message(context)
+
     cleaned = strip_model_recommendation_section(message, context)
     if not context.placement_recommendations:
         return cleaned
@@ -85,11 +87,7 @@ def crawl_is_inconclusive(context: AnalysisMessageContext) -> bool:
 def problem_intro(context: AnalysisMessageContext) -> str:
     if context.found and context.steps_to_target is not None:
         if context.steps_to_target <= context.good_depth_threshold:
-            return (
-                "Перелинковка выглядит хорошей: "
-                f"целевая страница находится за {context.steps_to_target} {step_word(context.steps_to_target)} "
-                f"при пороге {context.good_depth_threshold}."
-            )
+            return build_good_message(context)
         return (
             "Перелинковка слабая: "
             f"до целевой страницы {context.steps_to_target} {step_word(context.steps_to_target)}, "
@@ -103,9 +101,11 @@ def problem_intro(context: AnalysisMessageContext) -> str:
         if context.found_in_sitemap:
             parts.append("Целевая страница есть в sitemap.")
         parts.append(
-            f"Короткий путь до целевой страницы в пределах {context.search_depth_limit} {step_word_after_preposition(context.search_depth_limit)} в этом запуске не подтвержден."
+            f"Мы анализируем только страницы, достижимые от главной не более чем за {context.search_depth_limit} {step_word_after_preposition(context.search_depth_limit)}."
         )
-        parts.append("Обход был неполным, поэтому это еще не доказывает слабую перелинковку.")
+        parts.append(
+            "Целевая страница есть на сайте, но в эту область подтвержденно не попала или не была достигнута в рамках бюджета."
+        )
         return " ".join(parts)
 
     return (
@@ -116,8 +116,20 @@ def problem_intro(context: AnalysisMessageContext) -> str:
     )
 
 
-def should_render_multiple_candidates(context: AnalysisMessageContext) -> bool:
-    return bool(context.placement_recommendations)
+def build_good_message(context: AnalysisMessageContext) -> str:
+    target_label = (
+        "каноническая версия целевой страницы"
+        if "canonical_url" in context.matched_by
+        else "эквивалентная версия целевой страницы"
+        if "equivalent_url" in context.matched_by
+        else "целевая страница"
+    )
+    return (
+        "Перелинковка хорошая: "
+        f"{target_label} находится за {context.steps_to_target} {step_word(context.steps_to_target)} "
+        f"при пороге {context.good_depth_threshold}. "
+        "Пользователь быстро доберется до страницы, а поисковым системам легко увидеть ее место в структуре сайта."
+    )
 
 
 def build_soft_candidates_message(context: AnalysisMessageContext) -> str:

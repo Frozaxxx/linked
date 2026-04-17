@@ -1,0 +1,2 @@
+HTTPStatusError: Client error '404 Not Found' for url 'https://lenta.ru/rubrics/society/2020/03/15/coronavirus'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404

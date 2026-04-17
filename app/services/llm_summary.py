@@ -17,7 +17,6 @@ from app.services.llm_summary_templates import (
     has_site_access_issue,
     normalize_message,
     problem_intro,
-    should_render_multiple_candidates,
     soft_candidate_label,
     soft_candidates_sentence,
     strip_model_recommendation_section,
@@ -144,7 +143,6 @@ class LinkingAnalysisMessageGenerator:
     _finalize_message = staticmethod(finalize_message)
     _strip_model_recommendation_section = staticmethod(strip_model_recommendation_section)
     _problem_intro = staticmethod(problem_intro)
-    _should_render_multiple_candidates = staticmethod(should_render_multiple_candidates)
     _build_soft_candidates_message = staticmethod(build_soft_candidates_message)
     _append_soft_candidates_message = staticmethod(append_soft_candidates_message)
     _soft_candidates_sentence = staticmethod(soft_candidates_sentence)

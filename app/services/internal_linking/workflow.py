@@ -31,6 +31,7 @@ class InternalLinkingWorkflowMixin:
         pages_fetched = 0
         discovered_urls: set[str] = {self._start_url}
         discovered_depths: dict[str, int] = {self._start_url: 0}
+        discovered_paths: dict[str, list[str]] = {self._start_url: [self._start_url]}
         crawled_pages: dict[str, CrawledPageSnapshot] = {}
         search_depth_limit = settings.crawl_max_depth
         logger.info(
@@ -108,11 +109,12 @@ class InternalLinkingWorkflowMixin:
                             for link in page.links:
                                 if not self._should_enqueue_link(link.url):
                                     continue
-                                if self._target.url_matches(link.url):
+                                url_match_reason = self._target.url_match_reason(link.url)
+                                if url_match_reason:
                                     self._cancel_pending(tasks)
                                     return await self._build_response(
                                         found=True,
-                                        matched_by=["url"],
+                                        matched_by=[url_match_reason],
                                         steps_to_target=node.depth + 1,
                                         path=node.path + [link.url],
                                         pages_fetched=pages_fetched,
@@ -128,7 +130,11 @@ class InternalLinkingWorkflowMixin:
                                         search_depth_limit=search_depth_limit,
                                     )
                                 if link.url in discovered_urls:
-                                    self._remember_depth(discovered_depths, link.url, node.depth + 1)
+                                    next_depth = node.depth + 1
+                                    existing_depth = discovered_depths.get(link.url)
+                                    self._remember_depth(discovered_depths, link.url, next_depth)
+                                    if existing_depth is None or next_depth < existing_depth:
+                                        discovered_paths[link.url] = node.path + [link.url]
                                     continue
                                 candidate = CrawlNode(
                                     url=link.url,
@@ -137,6 +143,7 @@ class InternalLinkingWorkflowMixin:
                                     score=self._score_discovered_link(link.url, link.anchor_text),
                                 )
                                 self._remember_depth(discovered_depths, link.url, candidate.depth)
+                                discovered_paths[link.url] = candidate.path
                                 existing = level_candidates.get(link.url)
                                 if existing is None or candidate.score > existing.score:
                                     level_candidates[link.url] = candidate
@@ -159,11 +166,41 @@ class InternalLinkingWorkflowMixin:
                 )
                 pages_fetched += target_verification.pages_fetched
                 if target_verification.steps_to_target is not None:
+                    target_path_url = target_verification.path[-1] if target_verification.path else self._target.url
                     return await self._build_response(
                         found=True,
-                        matched_by=["url"],
+                        matched_by=[self._target_url_match_reason(target_path_url or "")],
                         steps_to_target=target_verification.steps_to_target,
                         path=target_verification.path,
+                        pages_fetched=pages_fetched,
+                        pages_discovered=len(discovered_urls),
+                        sitemap_checked=sitemap.checked,
+                        found_in_sitemap=sitemap.found_target,
+                        strategy=LIVE_SITEMAP_STRATEGY,
+                        timings=self._build_timings(started_at=started_at, finished_at=perf_counter(), found=True, sitemap=sitemap),
+                        client=client,
+                        crawled_pages=crawled_pages,
+                        discovered_depths=discovered_depths,
+                        sitemap_page_urls=sitemap.page_urls,
+                        search_depth_limit=search_depth_limit,
+                    )
+
+                target_parent_verification = await self._verify_target_parent_bridge(
+                    client=client,
+                    crawled_pages=crawled_pages,
+                    discovered_depths=discovered_depths,
+                    discovered_paths=discovered_paths,
+                    max_depth=search_depth_limit,
+                    reserve_seconds=self._recommendation_budget_reserve_seconds(),
+                )
+                pages_fetched += target_parent_verification.pages_fetched
+                if target_parent_verification.steps_to_target is not None:
+                    target_parent_path_url = target_parent_verification.path[-1] if target_parent_verification.path else self._target.url
+                    return await self._build_response(
+                        found=True,
+                        matched_by=[self._target_url_match_reason(target_parent_path_url or "")],
+                        steps_to_target=target_parent_verification.steps_to_target,
+                        path=target_parent_verification.path,
                         pages_fetched=pages_fetched,
                         pages_discovered=len(discovered_urls),
                         sitemap_checked=sitemap.checked,
