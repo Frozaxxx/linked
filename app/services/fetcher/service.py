@@ -100,18 +100,22 @@ class AsyncFetcher:
         failure_status_callback: Callable[[int, str], None] | None = None,
         allow_partial_html: bool = False,
         prefer_partial_html: bool = False,
+        prefer_browser: bool = False,
+        partial_html_bytes: int | None = None,
     ) -> FetchedDocument | None:
         if total_timeout_seconds is not None and total_timeout_seconds <= 0:
             return None
 
         deadline = perf_counter() + total_timeout_seconds if total_timeout_seconds is not None else None
-        if render_html and settings.fetch_html_render_mode == "browser-only":
-            return await self._fetch_html_with_browser(
+        if render_html and (settings.fetch_html_render_mode == "browser-only" or prefer_browser):
+            browser_document = await self._fetch_html_with_browser(
                 session,
                 url,
                 deadline=deadline,
                 failure_status_callback=failure_status_callback,
             )
+            if browser_document is not None or settings.fetch_html_render_mode == "browser-only" or prefer_browser:
+                return browser_document
 
         session.record_fetch_mode(render_html=render_html, mode="http-only")
         if render_html:
@@ -126,6 +130,7 @@ class AsyncFetcher:
                     timeout_seconds=timeout_seconds,
                     allow_partial_html=render_html and allow_partial_html,
                     prefer_partial_html=prefer_partial_html,
+                    partial_html_bytes=partial_html_bytes,
                     fetch_stats=session.fetch_stats,
                 ),
                 deadline=deadline,
@@ -231,9 +236,6 @@ class AsyncFetcher:
         return None
 
     async def _resolve_browser_context(self, session: FetchSession) -> BrowserContext | None:
-        if settings.fetch_browser_ws_endpoint:
-            return None
-
         if session.browser_context is not None:
             return session.browser_context
 
@@ -393,39 +395,29 @@ class AsyncFetcher:
         timeout_seconds: float,
         allow_partial_html: bool = False,
         prefer_partial_html: bool = False,
+        partial_html_bytes: int | None = None,
         fetch_stats: FetchTransportStats | None = None,
     ) -> FetchedDocument | None:
         body_bytes = bytearray()
         response: httpx.Response | None = None
         max_html_bytes = settings.fetch_html_max_bytes if allow_partial_html else 0
-        if prefer_partial_html and max_html_bytes > 0:
-            range_fetch_bytes = min(
-                max_html_bytes,
-                max(settings.fetch_html_early_return_bytes, PARTIAL_HTML_MIN_BYTES),
-            )
-            if fetch_stats is not None:
-                fetch_stats.html_http_range_attempts += 1
-            range_document = await self._fetch_partial_html_range(
-                client,
-                url,
-                timeout_seconds=timeout_seconds,
-                max_bytes=range_fetch_bytes,
-            )
-            if range_document is not None:
-                if fetch_stats is not None:
-                    fetch_stats.html_http_range_successes += 1
-                return range_document
-            if fetch_stats is not None:
-                fetch_stats.html_http_range_failures += 1
-            return None
+        requested_partial_bytes = partial_html_bytes or settings.fetch_html_early_return_bytes
+        partial_return_bytes = min(
+            max_html_bytes,
+            max(requested_partial_bytes, PARTIAL_HTML_MIN_BYTES),
+        )
 
         try:
             async with client.stream("GET", url, timeout=httpx.Timeout(timeout_seconds)) as streamed_response:
                 response = streamed_response
                 response.raise_for_status()
                 async for chunk in response.aiter_bytes():
-                    if prefer_partial_html and max_html_bytes > 0 and len(body_bytes) + len(chunk) >= max_html_bytes:
-                        remaining_bytes = max(max_html_bytes - len(body_bytes), 0)
+                    if (
+                        prefer_partial_html
+                        and partial_return_bytes > 0
+                        and len(body_bytes) + len(chunk) >= partial_return_bytes
+                    ):
+                        remaining_bytes = max(partial_return_bytes - len(body_bytes), 0)
                         capped_body_bytes = bytearray(body_bytes)
                         if remaining_bytes:
                             capped_body_bytes.extend(chunk[:remaining_bytes])
@@ -485,7 +477,7 @@ class AsyncFetcher:
                     max_bytes=(
                         min(
                             max_html_bytes,
-                            max(settings.fetch_html_early_return_bytes, PARTIAL_HTML_MIN_BYTES),
+                            max(requested_partial_bytes, PARTIAL_HTML_MIN_BYTES),
                         )
                         if max_html_bytes > 0
                         else PARTIAL_HTML_RANGE_BYTES
@@ -569,11 +561,12 @@ class AsyncFetcher:
             logger.debug("HTTP range fetch failed for %s: %s", url, exc)
             return None
 
-        if response is None or not self._can_return_partial_html(
-            response=response,
-            body_bytes=body_bytes,
-            allow_partial_html=True,
-        ):
+        if response is None:
+            return None
+        content_type = response.headers.get("content-type", "").lower()
+        if content_type and "html" not in content_type:
+            return None
+        if not body_bytes:
             return None
 
         logger.info(
@@ -588,7 +581,7 @@ class AsyncFetcher:
             final_url=str(response.url),
             body_bytes=bytes(body_bytes),
             content_type=response.headers.get("content-type", ""),
-            partial=True,
+            partial=response.status_code == 206 or len(body_bytes) >= PARTIAL_HTML_MIN_BYTES,
             encoding=response.encoding,
         )
 

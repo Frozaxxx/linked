@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from time import perf_counter
 
+import httpx
 import pytest
 from pydantic import ValidationError
 
@@ -80,6 +81,68 @@ def test_403_on_non_target_branch_blocks_sibling_urls() -> None:
     assert not analyzer._is_html_403_branch_blocked(
         "https://example.com/regional-collaboration-network/regions-great-lakes"
     )
+
+
+@pytest.mark.asyncio
+async def test_sitemap_fallback_frontier_starts_crawl_when_homepage_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "request_retry_count", 0)
+    monkeypatch.setattr(settings, "fetch_browser_enabled", False)
+    monkeypatch.setattr(settings, "yandex_gpt_enabled", False)
+    monkeypatch.setattr(settings, "sitemap_time_budget_seconds", 5.0)
+
+    target_url = "https://www.rbc.ru/economics/2019/12/20/5dfc5a679a7947d1b5b3e8a9"
+    source_url = "https://www.rbc.ru/economics/2019/12/20/source"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url == "https://www.rbc.ru/robots.txt":
+            return httpx.Response(
+                200,
+                text="User-agent: *\nAllow: /\nSitemap: https://www.rbc.ru/sitemap_index.xml\n",
+            )
+        if url == "https://www.rbc.ru/sitemap_index.xml":
+            return httpx.Response(
+                200,
+                text=(
+                    "<?xml version='1.0' encoding='UTF-8'?>"
+                    "<sitemapindex xmlns='http://www.sitemaps.org/schemas/sitemap/0.9'>"
+                    "<sitemap><loc>https://www.rbc.ru/economics/2019/12/sitemap.xml</loc></sitemap>"
+                    "</sitemapindex>"
+                ),
+                headers={"content-type": "application/xml"},
+            )
+        if url == "https://www.rbc.ru/economics/2019/12/sitemap.xml":
+            return httpx.Response(
+                200,
+                text=(
+                    "<?xml version='1.0' encoding='UTF-8'?>"
+                    "<urlset xmlns='http://www.sitemaps.org/schemas/sitemap/0.9'>"
+                    f"<url><loc>{target_url}</loc></url>"
+                    f"<url><loc>{source_url}</loc></url>"
+                    "</urlset>"
+                ),
+                headers={"content-type": "application/xml"},
+            )
+        if url == source_url:
+            return httpx.Response(
+                200,
+                text=f"<html><body><a href='{target_url}'>target</a></body></html>",
+                headers={"content-type": "text/html"},
+            )
+        return httpx.Response(404, text="not found")
+
+    analyzer = InternalLinkingAnalyzer(
+        LinkingAnalyzeRequest(target_url=target_url),
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = await analyzer.analyze()
+
+    assert response.found is True
+    assert response.found_in_sitemap is True
+    assert response.pages_fetched >= 1
+    assert response.path == [source_url, target_url]
 
 
 @pytest.mark.parametrize(

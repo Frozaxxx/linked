@@ -62,6 +62,7 @@ class InternalLinkingAnalyzer(
         self._robots_policy = None
         self._html_403_branch_counts: dict[str, int] = {}
         self._html_403_blocked_branches: set[str] = set()
+        self._auxiliary_pages_fetched = 0
 
     @staticmethod
     def _resolve_start_url(*, target_url: str | None) -> str | None:

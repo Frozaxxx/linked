@@ -10,6 +10,7 @@ from app.services.link_placement_models import (
     MAX_RECOMMENDATION_SOURCE_DEPTH,
     MAX_TERMS_PER_FIELD,
     MIN_RECOMMENDATION_SOURCE_DEPTH,
+    STRUCTURAL_DEPTH_PREFIXES,
     TEXT_TOKEN_RE,
     CrawledPageSnapshot,
     PlacementRecommendation,
@@ -27,6 +28,9 @@ from app.services.matcher import (
 class LinkPlacementTextMixin:
     def _build_soft_relevance_reason(self, snapshot: CrawledPageSnapshot) -> str:
         metadata_terms = snapshot.url_terms | snapshot.title_terms | snapshot.h1_terms
+        signature_overlap = self._signature_overlap_terms(metadata_terms | snapshot.body_terms)
+        if self._shared_path_bonus(snapshot.url) > 0 and not signature_overlap:
+            return "Проверенная страница из соседнего раздела сайта, которую можно использовать как рабочего донора."
         title_h1_overlap = list(self._overlapping_target_terms(snapshot.title_terms | snapshot.h1_terms))
         if title_h1_overlap:
             return f"Совпадение в title/H1 проверенной страницы по терминам: {', '.join(sorted(title_h1_overlap)[:4])}."
@@ -159,7 +163,8 @@ class LinkPlacementTextMixin:
         parts = self._path_parts(url)
         if not parts:
             return 0
-        depth = len(parts)
+        depth_parts = parts[1:] if parts[0].casefold() in STRUCTURAL_DEPTH_PREFIXES else parts
+        depth = len(depth_parts)
         return depth if depth >= 0 else None
 
     @staticmethod

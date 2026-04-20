@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass
 
+from pydantic import ConfigDict
+
+from app.models import SeoLinkedModel
 from app.settings import get_settings
 
 
@@ -109,8 +111,9 @@ CANVAS_SPOOFING_SCRIPT = """
 """
 
 
-@dataclass(frozen=True)
-class BrowserFingerprint:
+class BrowserFingerprint(SeoLinkedModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid", frozen=True)
+
     user_agent: str
     viewport: dict[str, int]
     accept_language: str

@@ -114,7 +114,9 @@ class LinkPlacementBuilderMixin:
             projected_steps = self._projected_steps(source_depth)
             fallback_score = self.score_source_url_fallback(url)
             if fallback_score is None:
-                continue
+                fallback_score = self._structural_parent_fallback_score(url)
+                if fallback_score is None:
+                    continue
             soft_score = self.score_source_url_soft(url)
             recommendation = PlacementRecommendation(
                 source_url=url,
@@ -131,6 +133,21 @@ class LinkPlacementBuilderMixin:
                 ranked.append((soft_score, recommendation))
 
         return self._finalize_ranked_recommendations(ranked=ranked, fallback_ranked=fallback_ranked)
+
+    def _structural_parent_fallback_score(self, url: str) -> int | None:
+        target_parts = self._path_parts(self._target.url or "")
+        source_parts = self._path_parts(url)
+        if (
+            not target_parts
+            or not source_parts
+            or len(source_parts) != 1
+            or len(target_parts) < 4
+            or target_parts[0] != source_parts[0]
+        ):
+            return None
+        if self._is_technical_url(url):
+            return None
+        return self._shared_path_bonus(url) + 1
 
     @staticmethod
     def _is_allowed_source_depth(source_depth: int | None) -> bool:

@@ -2,8 +2,16 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import httpx
+import pytest
+
+from app.models import CrawlDiagnosticsSnapshot
+from app.services.fetcher import FetchSession, FetchedDocument
+from app.services.internal_linking.recommendations import InternalLinkingRecommendationMixin
 from app.services.internal_linking.response import InternalLinkingResponseMixin
 from app.services.internal_linking.discovery import InternalLinkingDiscoveryMixin
+from app.services.internal_linking.runtime import InternalLinkingRuntimeMixin
+from app.services.internal_linking.verification import InternalLinkingVerificationMixin
 from app.services.link_placement import LinkPlacementRecommender
 from app.services.matcher import SearchTarget
 
@@ -23,12 +31,61 @@ class TargetMetadataHarness(InternalLinkingDiscoveryMixin):
         self._requested_target_url = "https://example.com/target"
         self._allowed_host = "example.com"
         self._fetcher = SimpleNamespace(fetch=None)
+        self.replacements: list[dict] = []
 
     def _remaining_fetch_budget_seconds(self) -> float | None:
         return 120.0
 
     def _is_allowed_by_robots(self, url: str) -> bool:
         return True
+
+    def _replace_target(self, **kwargs) -> None:
+        self.replacements.append(kwargs)
+
+
+class DirectParentBridgeHarness(
+    InternalLinkingVerificationMixin,
+    InternalLinkingRecommendationMixin,
+    InternalLinkingRuntimeMixin,
+):
+    def __init__(self, *, parent_body: str) -> None:
+        self._start_url = "https://example.com/"
+        self._allowed_host = "example.com"
+        self._target = SearchTarget(url="https://example.com/section/topic/target", title=None, text=None)
+        self._placement_recommender = LinkPlacementRecommender(
+            target=self._target,
+            start_url=self._start_url,
+            good_depth_threshold=4,
+        )
+        self._deadline_started_at = 0.0
+        self._crawl_diagnostics = CrawlDiagnosticsSnapshot(crawl_max_depth=4)
+        self._parent_body = parent_body
+        self.fetch_calls: list[dict] = []
+        self._fetcher = SimpleNamespace(fetch=self._fake_fetch)
+
+    async def _fake_fetch(self, client: FetchSession, url: str, **kwargs):
+        self.fetch_calls.append({"url": url, **kwargs})
+        if url != "https://example.com/section/topic":
+            return None
+        return FetchedDocument(
+            requested_url=url,
+            final_url=url,
+            body=self._parent_body,
+            content_type="text/html",
+            body_bytes=self._parent_body.encode("utf-8"),
+        )
+
+    def _remaining_budget_seconds(self) -> float | None:
+        return 120.0
+
+    def _remaining_fetch_budget_seconds(self) -> float | None:
+        return 120.0
+
+    def _is_allowed_by_robots(self, url: str) -> bool:
+        return True
+
+    def _record_html_fetch_failure_status(self, status_code: int, url: str) -> None:
+        return None
 
 
 def test_fetch_summary_reports_transport_at_top_level() -> None:
@@ -47,6 +104,118 @@ def test_target_metadata_timeout_is_capped_by_single_request_timeout(monkeypatch
     harness = TargetMetadataHarness()
 
     assert harness._target_metadata_timeout_seconds() == 20.0
+
+
+@pytest.mark.asyncio
+async def test_target_metadata_redirect_keeps_requested_url_as_match_target() -> None:
+    harness = TargetMetadataHarness()
+    harness._requested_target_url = "https://example.com/section/topic/target"
+    harness._fetcher = SimpleNamespace(fetch=pytest.fail)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "HEAD"
+        if str(request.url) == "https://example.com/short-target":
+            return httpx.Response(200, request=request)
+        return httpx.Response(
+            301,
+            headers={"location": "https://example.com/short-target"},
+            request=request,
+        )
+
+    session = FetchSession(
+        http_client=httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+            base_url="https://example.com",
+        )
+    )
+    try:
+        resolved = await harness._resolve_target_metadata(session)
+    finally:
+        await session.http_client.aclose()
+
+    assert resolved == 0
+    assert harness.replacements == []
+
+
+@pytest.mark.asyncio
+async def test_direct_parent_bridge_confirms_target_link_without_broad_crawl() -> None:
+    harness = DirectParentBridgeHarness(
+        parent_body="<html><body><a href='/section/topic/target'>Target</a></body></html>",
+    )
+    session = FetchSession(http_client=httpx.AsyncClient())
+    try:
+        result = await harness._verify_direct_target_parent_bridge(
+            client=session,
+            crawled_pages={},
+            max_depth=4,
+        )
+    finally:
+        await session.http_client.aclose()
+
+    assert result.steps_to_target == 2
+    assert result.path == [
+        "https://example.com/",
+        "https://example.com/section/topic",
+        "https://example.com/section/topic/target",
+    ]
+    assert harness.fetch_calls == [
+        {
+            "url": "https://example.com/section/topic",
+            "total_timeout_seconds": 120.0,
+            "failure_status_callback": harness._record_html_fetch_failure_status,
+            "prefer_browser": True,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_direct_parent_bridge_ignores_parent_without_target_link() -> None:
+    harness = DirectParentBridgeHarness(
+        parent_body="<html><body><a href='/section/topic/other'>Other</a></body></html>",
+    )
+    session = FetchSession(http_client=httpx.AsyncClient())
+    try:
+        result = await harness._verify_direct_target_parent_bridge(
+            client=session,
+            crawled_pages={},
+            max_depth=4,
+        )
+    finally:
+        await session.http_client.aclose()
+
+    assert result.steps_to_target is None
+    assert result.path == []
+
+
+@pytest.mark.asyncio
+async def test_direct_parent_bridge_does_not_match_redirect_canonical_short_url() -> None:
+    harness = DirectParentBridgeHarness(
+        parent_body="<html><body><a href='/short-target'>Canonical target</a></body></html>",
+    )
+    harness._target = SearchTarget(
+        url="https://example.com/section/topic/target",
+        title=None,
+        text=None,
+        canonical_url="https://example.com/short-target",
+        equivalent_urls=("https://example.com/short-target",),
+    )
+    harness._placement_recommender = LinkPlacementRecommender(
+        target=harness._target,
+        start_url=harness._start_url,
+        good_depth_threshold=4,
+    )
+    session = FetchSession(http_client=httpx.AsyncClient())
+    try:
+        result = await harness._verify_direct_target_parent_bridge(
+            client=session,
+            crawled_pages={},
+            max_depth=4,
+        )
+    finally:
+        await session.http_client.aclose()
+
+    assert result.steps_to_target is None
+    assert result.path == []
 
 
 def test_url_only_recommendations_require_some_crawl_or_sitemap_evidence() -> None:
@@ -75,7 +244,11 @@ def test_structural_recommendations_from_parent_branch_are_available_without_cra
 
     assert len(recommendations) >= 1
     assert recommendations[0].confidence == "soft"
-    assert recommendations[0].source_url == "https://www.noaa.gov/regional-collaboration-network/regions-great-lakes/glri"
+    assert [recommendation.source_url for recommendation in recommendations] == [
+        "https://www.noaa.gov/regional-collaboration-network/regions-great-lakes/glri",
+        "https://www.noaa.gov/regional-collaboration-network/regions-great-lakes",
+        "https://www.noaa.gov/regional-collaboration-network",
+    ]
 
 
 def test_depth_based_soft_recommendations_use_discovered_urls() -> None:
@@ -281,6 +454,43 @@ def test_soft_verified_recommendations_skip_broad_branch_only_title_h1_matches()
     assert recommendations == []
 
 
+def test_soft_verified_recommendations_prioritize_thematic_pages_over_structural_parents() -> None:
+    harness = ResponseFallbackHarness(
+        "https://www.noaa.gov/regional-collaboration-network/regions-great-lakes/glri/about-glri/glri-focus-area-5-foundations/winter-observations-using-autonomous-mobile-platforms",
+        "Winter observations using autonomous mobile platforms",
+    )
+    parent_snapshot = harness._placement_recommender.build_snapshot(
+        url="https://www.noaa.gov/regional-collaboration-network/regions-great-lakes/glri",
+        title="Great Lakes Restoration Initiative",
+        h1="Great Lakes Restoration Initiative",
+        depth=3,
+        text="Regional GLRI coordination.",
+    )
+    thematic_snapshot = harness._placement_recommender.build_snapshot(
+        url="https://www.noaa.gov/late-fall-winter-and-under-ice-observations-on-mobile-platforms",
+        title="Late fall, winter and under-ice observations on mobile platforms",
+        h1="Late fall, winter and under-ice observations on mobile platforms",
+        depth=1,
+        text="Autonomous platforms collect winter observations.",
+    )
+
+    recommendations = harness._placement_recommender.build_soft_verified_recommendations(
+        crawled_pages={
+            parent_snapshot.url: parent_snapshot,
+            thematic_snapshot.url: thematic_snapshot,
+        },
+        excluded_urls=set(),
+    )
+
+    assert [recommendation.source_url for recommendation in recommendations] == [
+        thematic_snapshot.url,
+        parent_snapshot.url,
+    ]
+    assert recommendations[1].reason == (
+        "Проверенная страница из соседнего раздела сайта, которую можно использовать как рабочего донора."
+    )
+
+
 def test_recommendations_skip_comment_modal_urls() -> None:
     harness = ResponseFallbackHarness(
         "https://www.noaa.gov/winter-observations-using-autonomous-mobile-platforms",
@@ -296,3 +506,44 @@ def test_recommendations_skip_comment_modal_urls() -> None:
     )
 
     assert all("comment_modal" not in recommendation.source_url for recommendation in recommendations)
+
+
+def test_news_article_recommendations_skip_different_dated_articles_when_only_section_matches() -> None:
+    harness = ResponseFallbackHarness(
+        "https://www.rbc.ru/economics/2019/12/20/5dfc5a679a7947d1b5b3e8a9",
+    )
+
+    recommendations = harness._build_depth_based_recommendations(
+        candidate_depths={
+            "https://www.rbc.ru/economics/01/03/2017/58b678bb9a7947cd9d432bff": 1,
+            "https://www.rbc.ru/economics/01/05/2016/5725bbd99a7947f97e8a3e18": 1,
+            "https://www.rbc.ru/economics": 1,
+            "https://www.rbc.ru/economics/2019": 2,
+            "https://www.rbc.ru/economics/2019/12": 3,
+        },
+        path=[],
+    )
+
+    assert [recommendation.source_url for recommendation in recommendations] == [
+        "https://www.rbc.ru/economics/2019/12",
+        "https://www.rbc.ru/economics/2019",
+        "https://www.rbc.ru/economics",
+    ]
+
+
+def test_structural_recommendations_do_not_count_rubrics_prefix_as_depth() -> None:
+    harness = ResponseFallbackHarness(
+        "https://lenta.ru/rubrics/society/2020/03/15/coronavirus",
+    )
+
+    recommendations = harness._placement_recommender.build_structural_recommendations(
+        sitemap_page_urls=set(harness._candidate_parent_urls()),
+        excluded_urls=set(),
+    )
+
+    assert [recommendation.source_url for recommendation in recommendations] == [
+        "https://lenta.ru/rubrics/society/2020/03",
+        "https://lenta.ru/rubrics/society/2020",
+        "https://lenta.ru/rubrics/society",
+    ]
+    assert [recommendation.source_depth for recommendation in recommendations] == [3, 2, 1]

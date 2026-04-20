@@ -4,7 +4,7 @@ import "./styles.css";
 
 const endpoint = "/api/v1/internal-linking/analyze";
 
-function App() {
+export function InternalLinkingApp({ apiEndpoint = endpoint } = {}) {
   const [targetUrl, setTargetUrl] = useState("");
   const [result, setResult] = useState("");
   const [error, setError] = useState("");
@@ -17,7 +17,7 @@ function App() {
     setIsLoading(true);
 
     try {
-      const response = await fetch(endpoint, {
+      const response = await fetch(apiEndpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -78,4 +78,22 @@ function App() {
   );
 }
 
-createRoot(document.getElementById("root")).render(<App />);
+export function mountInternalLinkingApp(container, options = {}) {
+  if (!container) {
+    throw new Error("Internal linking mount container was not found.");
+  }
+  const root = createRoot(container);
+  root.render(<InternalLinkingApp {...options} />);
+  return root;
+}
+
+if (typeof window !== "undefined") {
+  window.SeoLinkedInternalLinking = {
+    mount: mountInternalLinkingApp
+  };
+}
+
+const rootElement = typeof document === "undefined" ? null : document.getElementById("root");
+if (rootElement) {
+  mountInternalLinkingApp(rootElement);
+}

@@ -8,6 +8,7 @@ __pycache__/
 .venv/
 venv/
 env/
+.tmp-pip/
 
 # Build artifacts
 build/
@@ -18,6 +19,8 @@ pip-wheel-metadata/
 
 # Test and coverage artifacts
 .pytest_cache/
+.cache/
+pytest-cache-files-*/
 .coverage
 .coverage.*
 coverage.xml
@@ -43,3 +46,4 @@ Thumbs.db
 
 # Logs
 *.log
+logs/fetch-debug/

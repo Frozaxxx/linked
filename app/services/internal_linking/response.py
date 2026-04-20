@@ -41,15 +41,19 @@ class InternalLinkingResponseMixin(InternalLinkingRecommendationMixin):
             pages_discovered=pages_discovered,
             sitemap_page_urls=sitemap_page_urls,
         )
-        placement_recommendations = self._extend_placement_recommendations(
-            [],
-            self._placement_recommender.build_soft_verified_recommendations(
-                crawled_pages=crawled_pages,
-                excluded_urls=set(path),
-            ),
-        )
+        placement_recommendations = []
+        if status != OptimizationStatus.GOOD:
+            placement_recommendations = self._extend_placement_recommendations(
+                [],
+                self._placement_recommender.build_soft_verified_recommendations(
+                    crawled_pages=crawled_pages,
+                    excluded_urls=set(path),
+                ),
+            )
 
         if (
+            status != OptimizationStatus.GOOD
+            and
             self._needs_more_placement_recommendations(placement_recommendations)
             and discovered_depths
             and can_use_url_only_recommendations
@@ -62,7 +66,11 @@ class InternalLinkingResponseMixin(InternalLinkingRecommendationMixin):
                 ),
             )
 
-        if self._needs_more_placement_recommendations(placement_recommendations) and sitemap_page_urls:
+        if (
+            status != OptimizationStatus.GOOD
+            and self._needs_more_placement_recommendations(placement_recommendations)
+            and sitemap_page_urls
+        ):
             placement_recommendations = self._extend_placement_recommendations(
                 placement_recommendations,
                 self._placement_recommender.build_structural_recommendations(
@@ -72,6 +80,8 @@ class InternalLinkingResponseMixin(InternalLinkingRecommendationMixin):
             )
 
         if (
+            status != OptimizationStatus.GOOD
+            and
             self._needs_more_placement_recommendations(placement_recommendations)
             and self._target.url
             and can_use_url_only_recommendations
@@ -84,7 +94,11 @@ class InternalLinkingResponseMixin(InternalLinkingRecommendationMixin):
                 ),
             )
 
-        if self._needs_more_placement_recommendations(placement_recommendations) and sitemap_page_urls:
+        if (
+            status != OptimizationStatus.GOOD
+            and self._needs_more_placement_recommendations(placement_recommendations)
+            and sitemap_page_urls
+        ):
             sitemap_candidate_urls = self._rank_sitemap_candidate_urls(
                 sitemap_page_urls=sitemap_page_urls,
                 crawled_pages=crawled_pages,
@@ -108,7 +122,11 @@ class InternalLinkingResponseMixin(InternalLinkingRecommendationMixin):
                 ),
             )
 
-        if self._needs_more_placement_recommendations(placement_recommendations) and self._target.url:
+        if (
+            status != OptimizationStatus.GOOD
+            and self._needs_more_placement_recommendations(placement_recommendations)
+            and self._target.url
+        ):
             parent_verified_depths = await self._verify_candidate_depths(
                 client=client,
                 candidate_urls=self._candidate_parent_urls(),
@@ -128,7 +146,11 @@ class InternalLinkingResponseMixin(InternalLinkingRecommendationMixin):
                 ),
             )
 
-        if self._needs_more_placement_recommendations(placement_recommendations) and verified_candidate_depths:
+        if (
+            status != OptimizationStatus.GOOD
+            and self._needs_more_placement_recommendations(placement_recommendations)
+            and verified_candidate_depths
+        ):
             excluded_urls = set(path)
             placement_recommendations = self._extend_placement_recommendations(
                 placement_recommendations,
@@ -139,7 +161,11 @@ class InternalLinkingResponseMixin(InternalLinkingRecommendationMixin):
                 ),
             )
 
-        if self._needs_more_placement_recommendations(placement_recommendations) and can_use_url_only_recommendations:
+        if (
+            status != OptimizationStatus.GOOD
+            and self._needs_more_placement_recommendations(placement_recommendations)
+            and can_use_url_only_recommendations
+        ):
             placement_recommendations = self._extend_placement_recommendations(
                 placement_recommendations,
                 self._build_forced_recommendations(
@@ -151,13 +177,13 @@ class InternalLinkingResponseMixin(InternalLinkingRecommendationMixin):
                 ),
             )
 
-        placement_recommendations = await self._placement_reranker.rerank(
-            target=self._target,
-            recommendations=placement_recommendations,
-        )
-        if status == OptimizationStatus.GOOD:
-            placement_recommendations = []
+        if status != OptimizationStatus.GOOD:
+            placement_recommendations = await self._placement_reranker.rerank(
+                target=self._target,
+                recommendations=placement_recommendations,
+            )
 
+        pages_fetched += getattr(self, "_auxiliary_pages_fetched", 0)
         generated_message = await self._message_generator.generate(
             AnalysisMessageContext(
                 start_url=self._start_url,

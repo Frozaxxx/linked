@@ -523,6 +523,28 @@ async def test_fetch_uses_playwright_when_http_request_times_out(browser_session
 
 
 @pytest.mark.asyncio
+async def test_prefer_browser_does_not_fall_back_to_full_http_after_browser_failure(
+    browser_session: FetchSession,
+) -> None:
+    fetcher = AsyncFetcher(timeout_seconds=1, retry_count=0)
+    fetcher._fetch_with_browser = AsyncMock(side_effect=PlaywrightTimeoutError("browser timed out"))
+    fetcher._fetch_with_http = AsyncMock()
+
+    document = await fetcher.fetch(
+        browser_session,
+        "https://example.com/slow-browser-page",
+        total_timeout_seconds=0.5,
+        prefer_browser=True,
+    )
+
+    assert document is None
+    assert fetcher._fetch_with_browser.await_count == 1
+    assert fetcher._fetch_with_http.await_count == 0
+    assert browser_session.fetch_stats.html_playwright_failures == 1
+    assert browser_session.fetch_stats.html_http_attempts == 0
+
+
+@pytest.mark.asyncio
 async def test_fetch_does_not_retry_playwright_after_dynamic_http_response(browser_session: FetchSession) -> None:
     fetcher = AsyncFetcher(timeout_seconds=1, retry_count=2)
     fetcher._fetch_with_http = AsyncMock(

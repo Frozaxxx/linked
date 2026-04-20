@@ -6,7 +6,7 @@ from typing import Any
 
 from app.models import AnalysisMessageContext, GeneratedAnalysisMessage
 from app.schemas import OptimizationStatus
-from app.services.gigachat_client import create_gigachat_client
+from app.services.yandex_gpt_client import create_yandex_gpt_client
 from app.services.link_placement import PlacementRecommendation
 from app.services.llm_summary_templates import (
     append_soft_candidates_message,
@@ -39,7 +39,7 @@ class LinkingAnalysisMessageGenerator:
         if self._llm is None:
             if self._disabled_reason:
                 logger.warning(
-                    "GigaChat отключен, будет использовано резервное сообщение: %s",
+                    "YandexGPT отключен, будет использовано резервное сообщение: %s",
                     self._disabled_reason,
                 )
             return GeneratedAnalysisMessage(
@@ -52,7 +52,7 @@ class LinkingAnalysisMessageGenerator:
         try:
             response = await self._llm.ainvoke(prompt)
         except Exception as exc:  # pragma: no cover - зависит от внешнего API
-            logger.exception("Не удалось сгенерировать сообщение анализа через GigaChat.")
+            logger.exception("Не удалось сгенерировать сообщение анализа через YandexGPT.")
             return GeneratedAnalysisMessage(
                 text=build_fallback_message(context),
                 source="fallback",
@@ -64,7 +64,7 @@ class LinkingAnalysisMessageGenerator:
             return GeneratedAnalysisMessage(
                 text=build_fallback_message(context),
                 source="fallback",
-                error="GigaChat вернул пустой ответ.",
+                error="YandexGPT вернул пустой ответ.",
             )
 
         return GeneratedAnalysisMessage(
@@ -74,7 +74,7 @@ class LinkingAnalysisMessageGenerator:
 
     @staticmethod
     def _create_client() -> tuple[Any, str | None]:
-        return create_gigachat_client()
+        return create_yandex_gpt_client()
 
     @staticmethod
     def _build_prompt(context: AnalysisMessageContext) -> str:
@@ -118,8 +118,8 @@ class LinkingAnalysisMessageGenerator:
     def _resolve_prompt(context: AnalysisMessageContext) -> str:
         status = OptimizationStatus(context.optimization_status)
         if status == OptimizationStatus.GOOD:
-            return settings.gigachat_good_message_prompt
-        return settings.gigachat_bad_message_prompt
+            return settings.yandex_gpt_good_message_prompt
+        return settings.yandex_gpt_bad_message_prompt
 
     @staticmethod
     def _extract_text(content: Any) -> str:

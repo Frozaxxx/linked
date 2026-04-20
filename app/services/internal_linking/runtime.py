@@ -32,6 +32,11 @@ class InternalLinkingRuntimeMixin:
             request_based_budget,
         )
 
+    def _target_verification_budget_reserve_seconds(self) -> float:
+        total_budget = max(settings.analyze_time_budget_seconds, 0.0)
+        request_based_budget = max(settings.request_timeout_seconds, 0.0)
+        return min(total_budget * 0.2, request_based_budget)
+
     def _remaining_budget_seconds(self) -> float | None:
         if self._deadline_started_at is None:
             return None

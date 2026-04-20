@@ -5,6 +5,8 @@ import logging
 from time import perf_counter
 from urllib.parse import urlsplit
 
+import httpx
+
 from app.models import CrawlNode, SitemapSnapshot
 from app.services.fetcher import FetchSession
 from app.services.internal_linking.constants import SITEMAP_WAIT_TIMEOUT_SECONDS
@@ -67,14 +69,20 @@ class InternalLinkingDiscoveryMixin:
         if not self._is_allowed_by_robots(self._requested_target_url):
             logger.warning("Requested target URL is blocked by robots.txt: %s", self._requested_target_url)
             return 0
+        if await self._resolve_target_redirect_metadata(client):
+            return 0
         # Target metadata improves matching quality, but it is optional and must not
         # consume the entire crawl budget before BFS even starts.
         document = await self._fetcher.fetch(
             client,
             self._requested_target_url,
             total_timeout_seconds=self._target_metadata_timeout_seconds(),
+            allow_partial_html=True,
+            prefer_partial_html=True,
         )
         if document is None:
+            if await self._resolve_target_redirect_metadata(client):
+                return 0
             logger.warning("Failed to fetch requested target URL metadata: %s", self._requested_target_url)
             return 0
         normalized_final_url = normalize_url(document.final_url)
@@ -86,10 +94,14 @@ class InternalLinkingDiscoveryMixin:
             )
             return 0
         page = parse_html(document.body, normalized_final_url, self._allowed_host)
-        equivalent_urls = {self._requested_target_url, normalized_final_url}
+        equivalent_urls = {self._requested_target_url}
         resolved_target_url = self._requested_target_url
         canonical_url = None
-        if page.canonical_url and is_internal_url(page.canonical_url, self._allowed_host):
+        if (
+            normalized_final_url == self._requested_target_url
+            and page.canonical_url
+            and is_internal_url(page.canonical_url, self._allowed_host)
+        ):
             equivalent_urls.add(page.canonical_url)
             canonical_url = page.canonical_url
         resolved_title = self._requested_target_title or page.h1 or page.title or None
@@ -100,6 +112,33 @@ class InternalLinkingDiscoveryMixin:
             canonical_url=canonical_url,
         )
         return 1
+
+    async def _resolve_target_redirect_metadata(self, client: FetchSession) -> bool:
+        if not self._requested_target_url:
+            return False
+        timeout_seconds = self._target_metadata_timeout_seconds()
+        if timeout_seconds is not None and timeout_seconds <= 0:
+            return False
+        try:
+            response = await client.http_client.head(
+                self._requested_target_url,
+                follow_redirects=True,
+                timeout=httpx.Timeout(timeout_seconds or settings.request_timeout_seconds),
+            )
+            response.raise_for_status()
+        except (httpx.HTTPError, ValueError):
+            return False
+        normalized_final_url = normalize_url(str(response.url))
+        if not normalized_final_url or not is_internal_url(normalized_final_url, self._allowed_host):
+            return False
+        if normalized_final_url == self._requested_target_url:
+            return False
+        logger.info(
+            "Requested target URL redirects to a different URL; keeping requested URL as the match target: requested=%s final=%s",
+            self._requested_target_url,
+            normalized_final_url,
+        )
+        return True
 
     def _target_metadata_timeout_seconds(self) -> float | None:
         remaining_budget = self._remaining_fetch_budget_seconds()
@@ -118,7 +157,7 @@ class InternalLinkingDiscoveryMixin:
         if sitemap.completed or sitemap_task.done():
             return
         timeout = SITEMAP_WAIT_TIMEOUT_SECONDS
-        if pages_fetched == 0:
+        if pages_fetched == 0 or not sitemap.page_urls:
             timeout = max(timeout, settings.request_timeout_seconds)
         remaining_budget = self._remaining_budget_seconds()
         if remaining_budget is not None:
@@ -201,10 +240,13 @@ class InternalLinkingDiscoveryMixin:
         return min(remaining_sitemap, remaining_total)
 
     def _remaining_sitemap_budget_seconds(self, sitemap: SitemapSnapshot) -> float:
+        sitemap_budget = settings.sitemap_time_budget_seconds
+        if sitemap.checked and not sitemap.page_urls:
+            sitemap_budget = max(sitemap_budget, settings.request_timeout_seconds)
         if sitemap.started_at is None:
-            return max(settings.sitemap_time_budget_seconds, 0.0)
+            return max(sitemap_budget, 0.0)
         elapsed = perf_counter() - sitemap.started_at
-        return max(settings.sitemap_time_budget_seconds - elapsed, 0.0)
+        return max(sitemap_budget - elapsed, 0.0)
 
     def _sitemap_budget_exhausted(self, sitemap: SitemapSnapshot) -> bool:
         return self._remaining_sitemap_budget_seconds(sitemap) <= 0
@@ -236,12 +278,20 @@ class InternalLinkingDiscoveryMixin:
         if self._is_html_403_branch_blocked(node.url):
             logger.debug("Skipping HTML URL from 403-blocked branch: %s", node.url)
             return node, None
+        start_url = getattr(self, "_start_url", node.url)
+        is_start_page = node.depth == 0 and node.url == start_url
+        remaining_fetch_budget = self._remaining_fetch_budget_seconds()
+        partial_fetch_timeout = settings.fetch_partial_crawl_timeout_seconds
+        if remaining_fetch_budget is not None:
+            partial_fetch_timeout = min(partial_fetch_timeout, remaining_fetch_budget)
         async with self._semaphore:
             document = await self._fetcher.fetch(
                 client,
                 node.url,
-                total_timeout_seconds=self._remaining_fetch_budget_seconds(),
+                total_timeout_seconds=partial_fetch_timeout,
                 failure_status_callback=self._record_html_fetch_failure_status,
+                allow_partial_html=True,
+                prefer_partial_html=True,
             )
         if document is None:
             return node, None
@@ -251,6 +301,103 @@ class InternalLinkingDiscoveryMixin:
         if not self._is_allowed_by_robots(normalized_final_url):
             return node, None
         page = parse_html(document.body, normalized_final_url, self._allowed_host)
+        target_url = getattr(getattr(self, "_target", None), "url", None)
+        partial_min_links = self._partial_min_links_for_node(
+            normalized_final_url,
+            is_start_page=is_start_page,
+        )
+        should_enrich_partial = (
+            is_start_page
+            or (
+                bool(target_url)
+                and self._candidate_branch_bonus(normalized_final_url, {target_url}) >= 60
+            )
+        )
+        if (
+            document.partial
+            and len(page.links) < partial_min_links
+            and settings.fetch_html_max_bytes > settings.fetch_html_early_return_bytes
+        ):
+            async with self._semaphore:
+                retry_document = await self._fetcher.fetch(
+                    client,
+                    node.url,
+                    total_timeout_seconds=partial_fetch_timeout,
+                    failure_status_callback=self._record_html_fetch_failure_status,
+                    allow_partial_html=True,
+                    prefer_partial_html=True,
+                    partial_html_bytes=settings.fetch_html_max_bytes,
+                )
+            if retry_document is not None:
+                retry_final_url = normalize_url(retry_document.final_url)
+                if (
+                    retry_final_url
+                    and is_internal_url(retry_final_url, self._allowed_host)
+                    and self._is_allowed_by_robots(retry_final_url)
+                ):
+                    retry_page = parse_html(retry_document.body, retry_final_url, self._allowed_host)
+                    if len(retry_page.links) > len(page.links):
+                        normalized_final_url = retry_final_url
+                        document = retry_document
+                        page = retry_page
+                        partial_min_links = self._partial_min_links_for_node(
+                            normalized_final_url,
+                            is_start_page=is_start_page,
+                        )
+        if (
+            should_enrich_partial
+            and document.partial
+            and len(page.links) < partial_min_links
+        ):
+            retry_document = None
+            async with self._semaphore:
+                retry_document = await self._fetcher.fetch(
+                    client,
+                    node.url,
+                    total_timeout_seconds=self._remaining_fetch_budget_seconds(),
+                    failure_status_callback=self._record_html_fetch_failure_status,
+                    allow_partial_html=False,
+                    prefer_partial_html=False,
+                    prefer_browser=True,
+                )
+            if retry_document is not None:
+                retry_final_url = normalize_url(retry_document.final_url)
+                if (
+                    retry_final_url
+                    and is_internal_url(retry_final_url, self._allowed_host)
+                    and self._is_allowed_by_robots(retry_final_url)
+                ):
+                    normalized_final_url = retry_final_url
+                    document = retry_document
+                    page = parse_html(document.body, normalized_final_url, self._allowed_host)
+                    partial_min_links = self._partial_min_links_for_node(
+                        normalized_final_url,
+                        is_start_page=is_start_page,
+                    )
+        if (
+            is_start_page
+            and document.partial
+            and not page.links
+        ):
+            async with self._semaphore:
+                retry_document = await self._fetcher.fetch(
+                    client,
+                    node.url,
+                    total_timeout_seconds=self._remaining_fetch_budget_seconds(),
+                    failure_status_callback=self._record_html_fetch_failure_status,
+                    allow_partial_html=False,
+                    prefer_partial_html=False,
+                )
+            if retry_document is not None:
+                retry_final_url = normalize_url(retry_document.final_url)
+                if (
+                    retry_final_url
+                    and is_internal_url(retry_final_url, self._allowed_host)
+                    and self._is_allowed_by_robots(retry_final_url)
+                ):
+                    normalized_final_url = retry_final_url
+                    document = retry_document
+                    page = parse_html(document.body, normalized_final_url, self._allowed_host)
         if normalized_final_url != node.url:
             node = CrawlNode(
                 url=normalized_final_url,
@@ -260,6 +407,14 @@ class InternalLinkingDiscoveryMixin:
                 sitemap_boosted=node.sitemap_boosted,
             )
         return node, page
+
+    def _partial_min_links_for_node(self, url: str, *, is_start_page: bool) -> int:
+        if is_start_page:
+            return max(settings.fetch_partial_min_links_for_start_page, settings.fetch_partial_min_links_for_crawl)
+        target_url = getattr(getattr(self, "_target", None), "url", None)
+        if target_url and self._candidate_branch_bonus(url, {target_url}) >= 60:
+            return max(settings.fetch_partial_min_links_for_target_branch, settings.fetch_partial_min_links_for_crawl)
+        return settings.fetch_partial_min_links_for_crawl
 
     def _record_html_fetch_failure_status(self, status_code: int, url: str) -> None:
         if status_code != 403:

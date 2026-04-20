@@ -28,12 +28,15 @@ class InternalLinkingWorkflowMixin:
         self._robots_policy = None
         self._html_403_branch_counts = {}
         self._html_403_blocked_branches = set()
+        self._auxiliary_pages_fetched = 0
         pages_fetched = 0
         discovered_urls: set[str] = {self._start_url}
         discovered_depths: dict[str, int] = {self._start_url: 0}
         discovered_paths: dict[str, list[str]] = {self._start_url: [self._start_url]}
         crawled_pages: dict[str, CrawledPageSnapshot] = {}
+        sitemap_seeded_urls: set[str] = set()
         search_depth_limit = settings.crawl_max_depth
+        target_verification_reserve_seconds = self._target_verification_budget_reserve_seconds()
         logger.info(
             "Starting internal linking analysis: start_url=%s target_url=%s depth_limit=%s timeout=%s retry_count=%s",
             self._start_url,
@@ -49,13 +52,43 @@ class InternalLinkingWorkflowMixin:
             sitemap = SitemapSnapshot(started_at=perf_counter())
             sitemap_task = asyncio.create_task(self._collect_sitemap_snapshot(client, sitemap))
             try:
+                direct_parent_verification = await self._verify_direct_target_parent_bridge(
+                    client=client,
+                    crawled_pages=crawled_pages,
+                    max_depth=search_depth_limit,
+                )
+                pages_fetched += direct_parent_verification.pages_fetched
+                if direct_parent_verification.steps_to_target is not None:
+                    direct_parent_path_url = (
+                        direct_parent_verification.path[-1]
+                        if direct_parent_verification.path
+                        else self._target.url
+                    )
+                    return await self._build_response(
+                        found=True,
+                        matched_by=[self._target_url_match_reason(direct_parent_path_url or "")],
+                        steps_to_target=direct_parent_verification.steps_to_target,
+                        path=direct_parent_verification.path,
+                        pages_fetched=pages_fetched,
+                        pages_discovered=len(discovered_urls),
+                        sitemap_checked=sitemap.checked,
+                        found_in_sitemap=sitemap.found_target,
+                        strategy=LIVE_SITEMAP_STRATEGY,
+                        timings=self._build_timings(started_at=started_at, finished_at=perf_counter(), found=True, sitemap=sitemap),
+                        client=client,
+                        crawled_pages=crawled_pages,
+                        discovered_depths=discovered_depths,
+                        sitemap_page_urls=sitemap.page_urls,
+                        search_depth_limit=search_depth_limit,
+                    )
+
                 current_level: list[CrawlNode] = []
                 if self._is_allowed_by_robots(self._start_url):
                     current_level.append(CrawlNode(url=self._start_url, depth=0, path=[self._start_url]))
                 else:
                     logger.warning("Start URL is blocked by robots.txt: %s", self._start_url)
                 while current_level:
-                    if self._budget_exhausted():
+                    if self._budget_exhausted(reserve_seconds=target_verification_reserve_seconds):
                         logger.warning("Analysis budget exhausted during BFS traversal: start_url=%s", self._start_url)
                         break
                     level_candidates: dict[str, CrawlNode] = {}
@@ -67,7 +100,7 @@ class InternalLinkingWorkflowMixin:
                     try:
                         for task in asyncio.as_completed(tasks):
                             node, page = await task
-                            if self._budget_exhausted():
+                            if self._budget_exhausted(reserve_seconds=target_verification_reserve_seconds):
                                 self._cancel_pending(tasks)
                                 break
                             if page is None:
@@ -149,7 +182,31 @@ class InternalLinkingWorkflowMixin:
                                     level_candidates[link.url] = candidate
                         next_level = list(level_candidates.values())
                         apply_sitemap_bonus(next_level, sitemap.page_urls)
+                        if sitemap.page_urls and len(next_level) < settings.max_crawl_level_size:
+                            next_level.extend(
+                                self._build_sitemap_fallback_frontier(
+                                    sitemap_page_urls=sitemap.page_urls,
+                                    discovered_urls=discovered_urls | set(level_candidates),
+                                    discovered_depths=discovered_depths,
+                                    discovered_paths=discovered_paths,
+                                    sitemap_seeded_urls=sitemap_seeded_urls,
+                                )[: max(settings.max_crawl_level_size - len(next_level), 0)]
+                            )
+                        if not next_level:
+                            await self._await_sitemap_for_recommendations(
+                                sitemap_task,
+                                sitemap,
+                                pages_fetched=pages_fetched,
+                            )
+                            next_level = self._build_sitemap_fallback_frontier(
+                                sitemap_page_urls=sitemap.page_urls,
+                                discovered_urls=discovered_urls,
+                                discovered_depths=discovered_depths,
+                                discovered_paths=discovered_paths,
+                                sitemap_seeded_urls=sitemap_seeded_urls,
+                            )
                         discovered_urls.update(level_candidates.keys())
+                        discovered_urls.update(node.url for node in next_level)
                         current_level = self._limit_nodes(
                             prioritize(next_level),
                             depth=next_level[0].depth if next_level else 0,
@@ -157,33 +214,14 @@ class InternalLinkingWorkflowMixin:
                     finally:
                         await self._gather_tasks_with_logging(tasks, context="crawl level fetch")
 
-                target_verification = await self._verify_target_path(
+                parent_candidate_depths = await self._verify_candidate_depths(
                     client=client,
+                    candidate_urls=self._candidate_parent_urls(),
                     crawled_pages=crawled_pages,
-                    discovered_urls=discovered_urls,
-                    max_depth=search_depth_limit,
+                    discovered_paths=discovered_paths,
                     reserve_seconds=self._recommendation_budget_reserve_seconds(),
                 )
-                pages_fetched += target_verification.pages_fetched
-                if target_verification.steps_to_target is not None:
-                    target_path_url = target_verification.path[-1] if target_verification.path else self._target.url
-                    return await self._build_response(
-                        found=True,
-                        matched_by=[self._target_url_match_reason(target_path_url or "")],
-                        steps_to_target=target_verification.steps_to_target,
-                        path=target_verification.path,
-                        pages_fetched=pages_fetched,
-                        pages_discovered=len(discovered_urls),
-                        sitemap_checked=sitemap.checked,
-                        found_in_sitemap=sitemap.found_target,
-                        strategy=LIVE_SITEMAP_STRATEGY,
-                        timings=self._build_timings(started_at=started_at, finished_at=perf_counter(), found=True, sitemap=sitemap),
-                        client=client,
-                        crawled_pages=crawled_pages,
-                        discovered_depths=discovered_depths,
-                        sitemap_page_urls=sitemap.page_urls,
-                        search_depth_limit=search_depth_limit,
-                    )
+                self._merge_verified_depths(discovered_depths, parent_candidate_depths)
 
                 target_parent_verification = await self._verify_target_parent_bridge(
                     client=client,
@@ -201,6 +239,34 @@ class InternalLinkingWorkflowMixin:
                         matched_by=[self._target_url_match_reason(target_parent_path_url or "")],
                         steps_to_target=target_parent_verification.steps_to_target,
                         path=target_parent_verification.path,
+                        pages_fetched=pages_fetched,
+                        pages_discovered=len(discovered_urls),
+                        sitemap_checked=sitemap.checked,
+                        found_in_sitemap=sitemap.found_target,
+                        strategy=LIVE_SITEMAP_STRATEGY,
+                        timings=self._build_timings(started_at=started_at, finished_at=perf_counter(), found=True, sitemap=sitemap),
+                        client=client,
+                        crawled_pages=crawled_pages,
+                        discovered_depths=discovered_depths,
+                        sitemap_page_urls=sitemap.page_urls,
+                        search_depth_limit=search_depth_limit,
+                    )
+
+                target_verification = await self._verify_target_path(
+                    client=client,
+                    crawled_pages=crawled_pages,
+                    discovered_urls=discovered_urls,
+                    max_depth=search_depth_limit,
+                    reserve_seconds=self._recommendation_budget_reserve_seconds(),
+                )
+                pages_fetched += target_verification.pages_fetched
+                if target_verification.steps_to_target is not None:
+                    target_path_url = target_verification.path[-1] if target_verification.path else self._target.url
+                    return await self._build_response(
+                        found=True,
+                        matched_by=[self._target_url_match_reason(target_path_url or "")],
+                        steps_to_target=target_verification.steps_to_target,
+                        path=target_verification.path,
                         pages_fetched=pages_fetched,
                         pages_discovered=len(discovered_urls),
                         sitemap_checked=sitemap.checked,
@@ -248,3 +314,52 @@ class InternalLinkingWorkflowMixin:
             and self._is_allowed_by_robots(url)
             and not self._is_html_403_branch_blocked(url)
         )
+
+    def _build_sitemap_fallback_frontier(
+        self,
+        *,
+        sitemap_page_urls: set[str],
+        discovered_urls: set[str],
+        discovered_depths: dict[str, int],
+        discovered_paths: dict[str, list[str]],
+        sitemap_seeded_urls: set[str],
+    ) -> list[CrawlNode]:
+        if not sitemap_page_urls:
+            return []
+
+        candidates: list[CrawlNode] = []
+        for url in sitemap_page_urls:
+            if url in discovered_urls or url in sitemap_seeded_urls:
+                continue
+            if self._target.url and self._target.url_matches(url):
+                continue
+            if not self._should_enqueue_link(url):
+                continue
+            estimated_depth = self._placement_recommender._estimated_structural_depth(url)
+            max_sitemap_source_depth = max(settings.crawl_max_depth - 1, 0)
+            min_sitemap_source_depth = min(2, max_sitemap_source_depth)
+            sitemap_source_depth = min(
+                max(estimated_depth if estimated_depth is not None else min_sitemap_source_depth, min_sitemap_source_depth),
+                max_sitemap_source_depth,
+            )
+
+            node = CrawlNode(
+                url=url,
+                depth=sitemap_source_depth,
+                path=[url],
+                score=self._score_discovered_link(url, "") + settings.max_crawl_level_size,
+                sitemap_boosted=True,
+            )
+            candidates.append(node)
+
+        if not candidates:
+            return []
+
+        prioritized = prioritize(candidates)[: settings.max_crawl_level_size]
+        for node in prioritized:
+            sitemap_seeded_urls.add(node.url)
+            self._remember_depth(discovered_depths, node.url, node.depth)
+            discovered_paths[node.url] = node.path
+
+        logger.info("Using sitemap fallback frontier: candidates=%s", len(prioritized))
+        return prioritized

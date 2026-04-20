@@ -10,6 +10,14 @@ MAX_RECOMMENDATIONS = 3
 MAX_TERMS_PER_FIELD = 48
 MIN_RECOMMENDATION_SOURCE_DEPTH = 1
 MAX_RECOMMENDATION_SOURCE_DEPTH = 3
+STRUCTURAL_DEPTH_PREFIXES = {
+    "categories",
+    "category",
+    "rubric",
+    "rubrics",
+    "section",
+    "sections",
+}
 
 TECHNICAL_URL_TOKENS = {
     "404",

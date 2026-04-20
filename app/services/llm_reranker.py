@@ -5,7 +5,7 @@ import logging
 import re
 from typing import Any
 
-from app.services.gigachat_client import create_gigachat_client
+from app.services.yandex_gpt_client import create_yandex_gpt_client
 from app.services.link_placement import PlacementRecommendation
 from app.services.matcher import SearchTarget
 from app.settings import get_settings
@@ -20,9 +20,9 @@ class PlacementRecommendationReranker:
         self._llm, self._disabled_reason = self._create_client()
 
     def _create_client(self) -> tuple[Any, str | None]:
-        if not settings.gigachat_rerank_enabled:
-            return None, "GigaChat-ранкер отключен в конфигурации."
-        return create_gigachat_client(temperature=settings.gigachat_rerank_temperature)
+        if not settings.yandex_gpt_rerank_enabled:
+            return None, "YandexGPT-ранкер отключен в конфигурации."
+        return create_yandex_gpt_client(temperature=settings.yandex_gpt_rerank_temperature)
 
     async def rerank(
         self,
@@ -33,14 +33,14 @@ class PlacementRecommendationReranker:
         if self._llm is None or len(recommendations) < 2:
             return recommendations
 
-        candidate_limit = max(2, settings.gigachat_rerank_max_candidates)
+        candidate_limit = max(2, settings.yandex_gpt_rerank_max_candidates)
         candidates = recommendations[:candidate_limit]
         prompt = self._build_prompt(target=target, recommendations=candidates)
 
         try:
             response = await self._llm.ainvoke(prompt)
         except Exception as exc:  # pragma: no cover - depends on external API
-            logger.warning("Не удалось пересортировать рекомендации через GigaChat: %s", exc)
+            logger.warning("Не удалось пересортировать рекомендации через YandexGPT: %s", exc)
             return recommendations
 
         selected_index = self._parse_selected_index(self._extract_text(response.content), len(candidates))
