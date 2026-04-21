@@ -29,9 +29,20 @@ python_files = ["test_*.py"]
 addopts = "-q -p no:cacheprovider"
 asyncio_mode = "auto"
 
-[tool.setuptools.packages.find]
-include = ["app*"]
-exclude = ["logs*", "tests*"]
+[tool.setuptools]
+packages = [
+    "crawler_core",
+    "semantic_core",
+]
+py-modules = [
+    "api",
+    "config",
+    "llm",
+    "main",
+    "models",
+    "pipeline",
+    "prompts",
+]
 
 [build-system]
 requires = ["setuptools>=68.0"]

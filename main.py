@@ -3,67 +3,39 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-from pathlib import Path
-from typing import Any
+import sys
 
-from app.main import app
-from app.services.fetcher import AsyncFetcher
-from app.services.parser import ExtractionRule, extract_fields
-from app.settings import get_settings
+import uvicorn
 
-
-__all__ = ["app"]
+from api import app
+from pipeline import analyze
 
 
-def _build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Fetch and extract data from a page.")
-    parser.add_argument("--url", help="URL to fetch.")
-    parser.add_argument("--selector", action="append", help="CSS selector to extract. Can be passed multiple times.")
-    parser.add_argument("--attr", help="Attribute to extract for all CLI selectors, for example href.")
-    parser.add_argument("--config", help="Path to JSON config with url and rules.")
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run the SEO Linked app or analyze a URL from CLI.")
+    parser.add_argument("target_url", nargs="?", help="Target page URL. If omitted, starts the web app.")
     parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
+    parser.add_argument("--host", default="127.0.0.1", help="Web app host.")
+    parser.add_argument("--port", type=int, default=8000, help="Web app port.")
     return parser
 
 
-def _rules_from_config(config: dict[str, Any]) -> tuple[str, list[ExtractionRule]]:
-    url = str(config["url"])
-    raw_rules = config.get("rules") or []
-    rules = [ExtractionRule(**rule) for rule in raw_rules]
-    return url, rules
+async def run() -> int:
+    args = build_parser().parse_args()
+    if not args.target_url:
+        run_server(host=args.host, port=args.port)
+        return 0
 
-
-def _rules_from_args(args: argparse.Namespace) -> tuple[str, list[ExtractionRule]]:
-    if args.config:
-        config = json.loads(Path(args.config).read_text(encoding="utf-8"))
-        return _rules_from_config(config)
-    if not args.url or not args.selector:
-        raise SystemExit("--url and at least one --selector are required when --config is not used")
-    rules = [
-        ExtractionRule(
-            name=f"selector_{index}",
-            selector=selector,
-            attr=args.attr,
-            multiple=True,
-        )
-        for index, selector in enumerate(args.selector, start=1)
-    ]
-    return args.url, rules
-
-
-async def _run_cli() -> int:
-    args = _build_arg_parser().parse_args()
-    url, rules = _rules_from_args(args)
-    settings = get_settings()
-    fetcher = AsyncFetcher(timeout_seconds=settings.request_timeout_seconds, retry_count=settings.request_retry_count)
-    async with fetcher.create_client() as session:
-        document = await fetcher.fetch(session, url)
-    if document is None:
-        print(json.dumps({"ok": False, "url": url, "error": "fetch failed"}, ensure_ascii=False))
-        return 2
-    result = extract_fields(document.body, requested_url=url, final_url=document.final_url, rules=rules)
-    print(result.model_dump_json(indent=2 if args.pretty else None))
+    result = await analyze(args.target_url)
+    print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2 if args.pretty else None))
     return 0
 
 
+def run_server(*, host: str = "127.0.0.1", port: int = 8000) -> None:
+    uvicorn.run(app, host=host, port=port)
+
+
 if __name__ == "__main__":
-    raise SystemExit(asyncio.run(_run_cli()))
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    raise SystemExit(asyncio.run(run()))

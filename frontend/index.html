@@ -4,9 +4,38 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ДИО-Консалт | Анализ перелинковки</title>
+    <link rel="stylesheet" href="/static/src/styles.css" />
   </head>
   <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
+    <main class="app-shell">
+      <section class="panel" aria-label="Анализ внутренней перелинковки">
+        <a class="brand" href="http://80.93.62.177:8000/" aria-label="ДИО-Консалт">
+          <img
+            class="brand-logo"
+            src="http://80.93.62.177:8000/media/images/Logo_bez_fona_bez_teksta.width-80.height-80.png"
+            alt=""
+          />
+          <span class="brand-name">ДИО-Консалт</span>
+        </a>
+
+        <form class="analysis-form" id="analysis-form">
+          <label for="target-url">Введите URL страницы</label>
+          <textarea
+            id="target-url"
+            name="target_url"
+            placeholder="https://example.com/catalog/target-page"
+            rows="5"
+            required
+          ></textarea>
+          <button type="submit" id="submit-button">Проверить</button>
+        </form>
+
+        <section class="result" aria-live="polite">
+          <h1>Результат</h1>
+          <p id="result-text">Здесь появится ответ программы.</p>
+        </section>
+      </section>
+    </main>
+    <script src="/static/src/main.jsx?v=3" defer></script>
   </body>
 </html>
