@@ -7,10 +7,11 @@ from config import DONOR_MAX_DEPTH, FINAL_RECOMMENDATION_COUNT, LOCAL_CANDIDATE_
 from models import Candidate, Page
 
 from .constants import JUNK_PATH_PARTS
-from .profiles import branch_token_profile, page_token_profile
+from .profiles import branch_token_profile, domain_tokens, page_token_profile, token_profile_from_text
 from .scoring import (
     best_effort_score_candidate,
     candidate_sort_key,
+    is_blocked_page,
     is_general_shell_page,
     parsed_section_candidate_score,
     score_candidate,
@@ -157,13 +158,13 @@ def supplement_structural_candidates(
     excluded_urls: set[str],
     limit: int,
 ) -> list[Candidate]:
-    if len(candidates) >= FINAL_RECOMMENDATION_COUNT or has_weak_fallback(candidates):
+    if len(candidates) >= limit or has_weak_fallback(candidates):
         return candidates[:limit]
 
     existing_urls = {candidate.url for candidate in candidates}
     added = 0
     for url in target_parent_urls(target_url):
-        if len(candidates) >= min(FINAL_RECOMMENDATION_COUNT, limit) or added >= 1:
+        if len(candidates) >= limit or added >= 1:
             break
         if url in existing_urls or should_skip_url(url, target_url, excluded_urls):
             continue
@@ -259,11 +260,11 @@ def supplement_discovered_section_urls(
     additions.sort(key=candidate_sort_key)
     added_section_urls = 0
     for candidate in additions:
-        if len(candidates) >= min(FINAL_RECOMMENDATION_COUNT, limit):
+        if len(candidates) >= limit:
             break
         if candidate.url in existing_urls:
             continue
-        if candidate.source == "section_url" and added_section_urls >= 2:
+        if candidate.source == "section_url" and added_section_urls >= 3:
             break
         candidates.append(candidate)
         existing_urls.add(candidate.url)
@@ -318,12 +319,13 @@ def supplement_global_lexical_urls(
 
     additions.sort(key=candidate_sort_key)
     added = 0
+    max_additions = max(limit - len(candidates), 0)
     for candidate in additions:
-        if len(candidates) >= min(FINAL_RECOMMENDATION_COUNT, limit):
+        if len(candidates) >= limit:
             break
         if candidate.url in existing_urls:
             continue
-        if added >= 3:
+        if added >= max_additions:
             break
         candidates.append(candidate)
         existing_urls.add(candidate.url)
@@ -345,7 +347,13 @@ def global_lexical_url_score(*, candidate_url: str, page: Page | None, target_pr
     model_overlap = target_profile.model_like & profile.model_like
     heading_overlap = (target_lexical_terms & profile.strong) - topical_overlap - model_overlap
     overlap_count = len(topical_overlap | model_overlap)
+    # Do not treat broad brand/category pages as good reserve candidates
+    # when they match by only one brand/model token like "apple".
     if overlap_count < 1 and len(heading_overlap) < 2:
+        return 0.0, ""
+    if len(model_overlap) == 1 and not topical_overlap and len(heading_overlap) == 0:
+        return 0.0, ""
+    if overlap_count + len(heading_overlap) < 2:
         return 0.0, ""
     penalties = url_penalty(candidate_url)
     parsed_bonus = 3.0 if page is not None else 0.0
@@ -389,6 +397,7 @@ def discovered_section_url_score(
     topic_overlap = candidate_terms & section_context.topic_terms
     series_overlap = candidate_terms & section_context.series_terms
     parent_overlap = candidate_terms & section_context.parent_terms
+    slug_specificity = candidate_slug_specificity(candidate_url)
     shared_prefix = common_path_prefix_len(candidate_url, target_url)
     target_depth = estimated_structural_depth(target_url)
 
@@ -406,6 +415,8 @@ def discovered_section_url_score(
     if relation_bonus <= 0:
         return 0.0, ""
     if not topic_overlap and not strong_parent_overlap and tier != 1:
+        return 0.0, ""
+    if not topic_overlap and strong_parent_overlap and tier <= 2 and slug_specificity < 2:
         return 0.0, ""
 
     topic_score = len(topic_overlap) * 12.0
@@ -427,6 +438,14 @@ def discovered_section_url_score(
     if parent_overlap:
         parts.append("parent: " + ", ".join(sorted(parent_overlap)[:8]))
     return score, "; ".join(parts)
+
+
+def candidate_slug_specificity(candidate_url: str) -> int:
+    parts = path_parts(candidate_url)
+    if not parts:
+        return 0
+    profile = token_profile_from_text(parts[-1].replace("-", " ").replace("_", " "), domain_generics=domain_tokens(candidate_url), keep_numbers=True)
+    return len(profile.strong)
 
 
 def supplement_parsed_section_candidates(
@@ -482,7 +501,7 @@ def supplement_parsed_section_candidates(
 
     additions.sort(key=candidate_sort_key)
     for candidate in additions:
-        if len(candidates) >= min(FINAL_RECOMMENDATION_COUNT, limit):
+        if len(candidates) >= limit:
             break
         if candidate.url in existing_urls:
             continue
@@ -545,6 +564,8 @@ def choose_best_effort_candidate(
 def should_skip_url(url: str, target_url: str, excluded_urls: set[str]) -> bool:
     if same_url(url, target_url) or url in excluded_urls:
         return True
+    if is_short_alias_of_target_url(url, target_url):
+        return True
     parsed = urlsplit(url)
     if parsed.query and len(parsed.query) > 20:
         return True
@@ -558,6 +579,8 @@ def should_skip_url(url: str, target_url: str, excluded_urls: set[str]) -> bool:
 
 def should_skip_page(page: Page, target_url: str) -> bool:
     if page.depth == 0:
+        return True
+    if is_blocked_page(page):
         return True
     profile = page_token_profile(page, page.url)
     if not profile.strong and not profile.location:
@@ -578,3 +601,15 @@ def is_short_alias_of_target_branch(candidate_url: str, target_url: str) -> bool
     if candidate_parts[0] in {"rubric", "rubrics", "category", "categories", "topic", "topics"}:
         return False
     return candidate_parts[-1] in set(target_parts[:-1])
+
+
+def is_short_alias_of_target_url(candidate_url: str, target_url: str) -> bool:
+    candidate_parts = [part.casefold() for part in urlsplit(candidate_url).path.split("/") if part]
+    target_parts = [part.casefold() for part in urlsplit(target_url).path.split("/") if part]
+    if not candidate_parts or not target_parts:
+        return False
+    if len(candidate_parts) >= len(target_parts):
+        return False
+    if candidate_parts[0] in {"rubric", "rubrics", "category", "categories", "topic", "topics"}:
+        return False
+    return candidate_parts == target_parts[-len(candidate_parts):]

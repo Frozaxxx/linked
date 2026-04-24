@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from config import FINAL_RECOMMENDATION_COUNT, GOOD_DEPTH_THRESHOLD, LOCAL_CANDIDATE_LIMIT
+from config import DONOR_MAX_DEPTH, FINAL_RECOMMENDATION_COUNT, GOOD_DEPTH_THRESHOLD, LOCAL_CANDIDATE_LIMIT
 from crawler_core.core import crawl_site
 from llm import build_final_message, rerank_candidates
 from models import AnalysisResult, Candidate, Page
 from prompts import fallback_message
 from semantic_core.selection import choose_top_candidates
+from semantic_core.scoring import is_blocked_page
 
 
 async def analyze(target_url: str) -> AnalysisResult:
@@ -84,7 +85,7 @@ async def analyze(target_url: str) -> AnalysisResult:
             ),
         )
 
-    target_page = crawl.target_page or synthetic_target_page(crawl.target_url)
+    target_page = crawl.target_page if crawl.target_page is not None and not is_blocked_page(crawl.target_page) else synthetic_target_page(crawl.target_url)
     local_candidates = choose_top_candidates(
         target_url=crawl.target_url,
         target_page=target_page,
@@ -92,9 +93,10 @@ async def analyze(target_url: str) -> AnalysisResult:
         discovered_urls=crawl.discovered_urls,
         excluded_urls=excluded_urls,
     )
+    eligible_candidates = filter_user_facing_candidates(local_candidates)
     llm_top3, rerank_source, llm_explanation = await rerank_candidates(
         target_url=crawl.target_url,
-        candidates=local_candidates,
+        candidates=eligible_candidates,
     )
 
     result = AnalysisResult(
@@ -117,7 +119,11 @@ async def analyze(target_url: str) -> AnalysisResult:
         requested_top_k=LOCAL_CANDIDATE_LIMIT,
         local_candidates_count=len(local_candidates),
         returned_top_k=min(len(llm_top3), FINAL_RECOMMENDATION_COUNT),
-        diagnostic_reasons=diagnostic_reasons(crawl=crawl, candidates=llm_top3),
+        diagnostic_reasons=diagnostic_reasons(
+            crawl=crawl,
+            local_candidates=local_candidates,
+            candidates=llm_top3,
+        ),
         local_top5=local_candidates,
         llm_top3=llm_top3,
         candidates=llm_top3,
@@ -131,6 +137,7 @@ async def analyze(target_url: str) -> AnalysisResult:
         ),
     )
     result.message, message_source = await build_final_message(result)
+    result.message = harmonize_message_with_candidates(result.message, result.candidates)
     result.message = with_candidate_explanations(result.message, result.candidates)
     if message_source != "llm" and result.rerank_source == "llm":
         result.rerank_source = f"{result.rerank_source}; message {message_source}"
@@ -172,10 +179,76 @@ def with_candidate_explanations(message: str, candidates: list[Candidate]) -> st
     return f"{message.rstrip()} {' '.join(lines)}"
 
 
-def diagnostic_reasons(*, crawl, candidates: list[Candidate]) -> list[str]:
+def harmonize_message_with_candidates(message: str, candidates: list[Candidate]) -> str:
+    if not candidates:
+        return message
+    normalized = " ".join(message.split())
+    no_donor_claims = (
+        "среди разобранных страниц не найдено достаточно хороших тематических доноров",
+        "не найдено достаточно хороших тематических доноров",
+    )
+    for claim in no_donor_claims:
+        if claim in normalized.casefold():
+            return normalized.replace(
+                claim,
+                "сильных тематических доноров среди разобранных страниц не найдено, но есть резервные кандидаты",
+                1,
+            )
+    return message
+
+
+def filter_user_facing_candidates(candidates: list[Candidate]) -> list[Candidate]:
+    strict_candidates: list[Candidate] = []
+    reserve_candidates: list[Candidate] = []
+    for candidate in candidates:
+        if not has_acceptable_candidate_depth(candidate):
+            continue
+        if candidate.source in {"section_hub", "best_effort"}:
+            continue
+        if is_strict_user_facing_candidate(candidate):
+            strict_candidates.append(candidate)
+            continue
+        if is_reserve_user_facing_candidate(candidate):
+            reserve_candidates.append(candidate)
+
+    selected = strict_candidates[:FINAL_RECOMMENDATION_COUNT]
+    if len(selected) < FINAL_RECOMMENDATION_COUNT:
+        selected.extend(reserve_candidates[: FINAL_RECOMMENDATION_COUNT - len(selected)])
+    return selected
+
+
+def has_acceptable_candidate_depth(candidate: Candidate) -> bool:
+    if candidate.depth is None or candidate.depth > DONOR_MAX_DEPTH:
+        return False
+    return True
+
+
+def is_strict_user_facing_candidate(candidate: Candidate) -> bool:
+    if candidate.confidence == "low" and "evidence=structural_fallback" in candidate.reason:
+        return False
+    if candidate.source == "section_url":
+        return False
+    return True
+
+
+def is_reserve_user_facing_candidate(candidate: Candidate) -> bool:
+    if "evidence=structural_fallback" in candidate.reason:
+        return False
+    if candidate.source == "section_url":
+        return "evidence=parent_topic_support" in candidate.reason or "evidence=topic" in candidate.reason
+    if candidate.source == "lexical_reserve":
+        return "evidence=topic" in candidate.reason
+    if candidate.source == "parsed_section":
+        return candidate.confidence == "low"
+    return True
+
+
+def diagnostic_reasons(*, crawl, local_candidates: list[Candidate] | None = None, candidates: list[Candidate]) -> list[str]:
     reasons: list[str] = []
     if not crawl.found:
         reasons.append("target_not_found_in_crawl_path")
+    if local_candidates and not candidates:
+        reasons.append("all_candidates_filtered_as_weak_or_poorly_linked")
     if candidates and not any(candidate.source == "parsed" and candidate.confidence in {"normal", "high"} for candidate in candidates):
         reasons.append("no_confirmed_strong_content_donor")
     if any(candidate.source == "section_hub" for candidate in candidates):

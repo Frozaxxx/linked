@@ -175,6 +175,8 @@ async def crawl_site(target_url: str) -> CrawlResult:
                     break
                 if parent_url in pages or urls_equal(parent_url, home_url):
                     continue
+                if estimated_structural_depth(parent_url) > CRAWL_MAX_DEPTH:
+                    continue
                 if OBEY_ROBOTS_TXT and not robots.is_allowed(parent_url):
                     continue
                 page = await fetch_page(
@@ -237,6 +239,8 @@ async def fetch_extra_pages(
         if len(pages) + len(batch) >= MAX_PAGES or deadline_expired(deadline):
             break
         if url in pages or url in skipped_urls:
+            continue
+        if estimated_structural_depth(url) > CRAWL_MAX_DEPTH:
             continue
         if OBEY_ROBOTS_TXT and not robots.is_allowed(url):
             continue

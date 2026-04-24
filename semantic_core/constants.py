@@ -238,3 +238,17 @@ JUNK_PATH_PARTS = {
     "terms",
     "user",
 }
+
+BLOCKED_PAGE_MARKERS = {
+    "access denied",
+    "captcha",
+    "cloudflare",
+    "denied",
+    "forbidden",
+    "problem with ip",
+    "verify you are human",
+    "доступ ограничен",
+    "капча",
+    "проблема с ip",
+    "проверка, что вы не робот",
+}

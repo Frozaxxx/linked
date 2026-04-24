@@ -5,7 +5,7 @@ from urllib.parse import urlsplit
 
 from models import Candidate, Page
 
-from .constants import GENERIC_HEADING_TOKENS, JUNK_PATH_PARTS, VERTICAL_GROUPS
+from .constants import BLOCKED_PAGE_MARKERS, GENERIC_HEADING_TOKENS, JUNK_PATH_PARTS, VERTICAL_GROUPS
 from .profiles import TokenProfile, branch_token_profile, page_token_profile, tokenize
 from .sections import (
     SectionContext,
@@ -307,7 +307,18 @@ def general_page_penalty(candidate_url: str, target_url: str, page: Page | None,
     return penalty
 
 
+def is_blocked_page(page: Page | None) -> bool:
+    if page is None:
+        return False
+    haystack = " ".join(part for part in (page.title, page.h1, page.text) if part).casefold()
+    if not haystack:
+        return False
+    return any(marker in haystack for marker in BLOCKED_PAGE_MARKERS)
+
+
 def is_general_shell_page(url: str, page: Page | None, profile: TokenProfile) -> bool:
+    if is_blocked_page(page):
+        return True
     parts = [part for part in urlsplit(url).path.split("/") if part]
     if len(parts) == 0:
         return True
